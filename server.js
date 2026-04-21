@@ -14,15 +14,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const upload = multer({ dest: 'uploads/' });
+// ✅ Use memory storage (important for Render)
+const upload = multer({ storage: multer.memoryStorage() });
 
 /* =========================
    CLOUDINARY CONFIG
 ========================= */
 cloudinary.config({
-  cloud_name: process.env.CLOUD_NAME,
-  api_key: process.env.API_KEY,
-  api_secret: process.env.API_SECRET,
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 /* =========================
@@ -82,11 +83,18 @@ const Order = mongoose.model('Order', orderSchema);
    IMAGE UPLOAD ROUTE
 ========================= */
 
-// 📸 Upload only image (optional use)
+// 📸 Upload image only
 app.post('/upload', upload.single('image'), async (req, res) => {
   try {
-    const result = await cloudinary.uploader.upload(req.file.path, {
-      folder: "rolling_products"
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: "rolling_products" },
+        (error, result) => {
+          if (result) resolve(result);
+          else reject(error);
+        }
+      );
+      stream.end(req.file.buffer);
     });
 
     res.json({
@@ -115,19 +123,26 @@ app.post('/product', upload.single('image'), async (req, res) => {
       });
     }
 
-    // Upload image to Cloudinary
-    const result = await cloudinary.uploader.upload(req.file.path, {
-      folder: "rolling_products",
-      transformation: [
-        { width: 500, height: 500, crop: "fill" }
-      ]
+    // Upload to Cloudinary
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        {
+          folder: "rolling_products",
+          transformation: [{ width: 500, height: 500, crop: "fill" }]
+        },
+        (error, result) => {
+          if (result) resolve(result);
+          else reject(error);
+        }
+      );
+      stream.end(req.file.buffer);
     });
 
     const product = new Product({
       name,
       price,
-      image: result.secure_url,
-      category
+      category,
+      image: result.secure_url
     });
 
     await product.save();
