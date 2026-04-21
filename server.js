@@ -1,25 +1,37 @@
-require('dotenv').config(); // ✅ load env
+require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
 
 const app = express();
 
-// ✅ MIDDLEWARE
+/* =========================
+   MIDDLEWARE
+========================= */
 app.use(cors());
 app.use(express.json());
+
+const upload = multer({ dest: 'uploads/' });
+
+/* =========================
+   CLOUDINARY CONFIG
+========================= */
+cloudinary.config({
+  cloud_name: process.env.CLOUD_NAME,
+  api_key: process.env.API_KEY,
+  api_secret: process.env.API_SECRET,
+});
 
 /* =========================
    ROOT + HEALTH
 ========================= */
-
-// Root route (fixes "Cannot GET /")
 app.get('/', (req, res) => {
   res.send("🚀 Rolling Backend API is LIVE");
 });
 
-// Health check (important for Render)
 app.get('/health', (req, res) => {
   res.json({ status: "OK" });
 });
@@ -27,19 +39,12 @@ app.get('/health', (req, res) => {
 /* =========================
    MONGODB CONNECTION
 ========================= */
-
 const connectDB = async () => {
   try {
-    if (!process.env.MONGO_URL) {
-      throw new Error("❌ MONGO_URL missing in .env");
-    }
-
-    // ✅ NO options (mongoose v7+)
     await mongoose.connect(process.env.MONGO_URL);
-
     console.log("✅ MongoDB Connected");
   } catch (err) {
-    console.error("❌ DB Connection Error:", err.message);
+    console.error("❌ DB Error:", err.message);
     process.exit(1);
   }
 };
@@ -47,14 +52,26 @@ const connectDB = async () => {
 connectDB();
 
 /* =========================
-   ORDER MODEL
+   MODELS
 ========================= */
 
+// 📦 PRODUCT
+const productSchema = new mongoose.Schema({
+  name: String,
+  price: Number,
+  image: String,
+  category: String,
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Product = mongoose.model('Product', productSchema);
+
+// 🧾 ORDER
 const orderSchema = new mongoose.Schema({
-  type: { type: String, required: true },
-  items: { type: Array, default: [] },
-  total: { type: Number, default: 0 },
-  deliveryFee: { type: Number, default: 0 },
+  type: String,
+  items: Array,
+  total: Number,
+  deliveryFee: Number,
   status: { type: String, default: 'pending' },
   createdAt: { type: Date, default: Date.now }
 });
@@ -62,133 +79,135 @@ const orderSchema = new mongoose.Schema({
 const Order = mongoose.model('Order', orderSchema);
 
 /* =========================
-   ROUTES
+   IMAGE UPLOAD ROUTE
 ========================= */
 
-// 🚀 CREATE ORDER
-app.post('/order', async (req, res) => {
+// 📸 Upload only image (optional use)
+app.post('/upload', upload.single('image'), async (req, res) => {
   try {
-    const { type, items, total, riderNearby } = req.body;
-
-    if (!type) {
-      return res.status(400).json({
-        success: false,
-        message: "Order type is required"
-      });
-    }
-
-    const order = new Order({
-      type,
-      items,
-      total,
-      deliveryFee: riderNearby ? 0 : 5,
+    const result = await cloudinary.uploader.upload(req.file.path, {
+      folder: "rolling_products"
     });
-
-    await order.save();
-
-    res.status(201).json({
-      success: true,
-      message: "Order created 🚀",
-      data: order
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// 📄 GET ALL ORDERS
-app.get('/orders', async (req, res) => {
-  try {
-    const orders = await Order.find().sort({ createdAt: -1 });
 
     res.json({
       success: true,
-      count: orders.length,
-      data: orders
+      imageUrl: result.secure_url
     });
 
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// 📄 GET SINGLE ORDER
-app.get('/orders/:id', async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id);
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found"
-      });
-    }
-
-    res.json({
-      success: true,
-      data: order
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// 🔄 UPDATE ORDER STATUS
-app.put('/order/:id', async (req, res) => {
-  try {
-    const { status } = req.body;
-
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true }
-    );
-
-    res.json({
-      success: true,
-      message: "Order updated",
-      data: order
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// ❌ DELETE ORDER
-app.delete('/order/:id', async (req, res) => {
-  try {
-    await Order.findByIdAndDelete(req.params.id);
-
-    res.json({
-      success: true,
-      message: "Order deleted"
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
 /* =========================
-   SERVER START
+   PRODUCT ROUTES
+========================= */
+
+// ➕ CREATE PRODUCT WITH IMAGE
+app.post('/product', upload.single('image'), async (req, res) => {
+  try {
+    const { name, price, category } = req.body;
+
+    if (!name || !price || !req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, price, image required"
+      });
+    }
+
+    // Upload image to Cloudinary
+    const result = await cloudinary.uploader.upload(req.file.path, {
+      folder: "rolling_products",
+      transformation: [
+        { width: 500, height: 500, crop: "fill" }
+      ]
+    });
+
+    const product = new Product({
+      name,
+      price,
+      image: result.secure_url,
+      category
+    });
+
+    await product.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Product created 🚀",
+      data: product
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📄 GET ALL PRODUCTS
+app.get('/products', async (req, res) => {
+  const products = await Product.find().sort({ createdAt: -1 });
+  res.json(products);
+});
+
+// 📄 GET SINGLE PRODUCT
+app.get('/product/:id', async (req, res) => {
+  const product = await Product.findById(req.params.id);
+  res.json(product);
+});
+
+// ❌ DELETE PRODUCT
+app.delete('/product/:id', async (req, res) => {
+  await Product.findByIdAndDelete(req.params.id);
+  res.json({ message: "Deleted" });
+});
+
+/* =========================
+   ORDER ROUTES
+========================= */
+
+// 🚀 CREATE ORDER
+app.post('/order', async (req, res) => {
+  const { type, items, total, riderNearby } = req.body;
+
+  const order = new Order({
+    type,
+    items,
+    total,
+    deliveryFee: riderNearby ? 0 : 5,
+  });
+
+  await order.save();
+
+  res.json(order);
+});
+
+// 📄 GET ALL ORDERS
+app.get('/orders', async (req, res) => {
+  const orders = await Order.find().sort({ createdAt: -1 });
+  res.json(orders);
+});
+
+// 🔄 UPDATE ORDER
+app.put('/order/:id', async (req, res) => {
+  const { status } = req.body;
+
+  const order = await Order.findByIdAndUpdate(
+    req.params.id,
+    { status },
+    { new: true }
+  );
+
+  res.json(order);
+});
+
+// ❌ DELETE ORDER
+app.delete('/order/:id', async (req, res) => {
+  await Order.findByIdAndDelete(req.params.id);
+  res.json({ message: "Deleted" });
+});
+
+/* =========================
+   SERVER
 ========================= */
 
 const PORT = process.env.PORT || 3000;
