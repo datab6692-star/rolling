@@ -5,10 +5,16 @@ const mongoose = require('mongoose');
 const app = express();
 app.use(cors());
 app.use(express.json());
-// ✅ CONNECT MONGODB
-mongoose.connect('mongodb+srv://admin:admin123@cluster0.gk3y8lc.mongodb.net/rolling_store')
+
+// ✅ ROOT ROUTE (no more "Cannot GET /")
+app.get('/', (req, res) => {
+  res.send("🚀 Rolling Backend API is running");
+});
+
+// ✅ CONNECT MONGODB (ENV VARIABLE)
+mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log("✅ MongoDB Connected"))
-  .catch((err) => console.log(err));
+  .catch((err) => console.log("❌ DB Error:", err));
 
 // ✅ ORDER MODEL
 const orderSchema = new mongoose.Schema({
@@ -39,12 +45,16 @@ app.post('/order', async (req, res) => {
     await order.save();
 
     res.json({
-      message: "Order saved to DB 🚀",
+      success: true,
+      message: "Order saved 🚀",
       order
     });
 
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
@@ -52,13 +62,24 @@ app.post('/order', async (req, res) => {
 app.get('/orders', async (req, res) => {
   try {
     const orders = await Order.find().sort({ createdAt: -1 });
-    res.json(orders);
+
+    res.json({
+      success: true,
+      count: orders.length,
+      data: orders
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
-// 🚀 START SERVER
-app.listen(3000, () => {
-  console.log("🚀 Server running on http://localhost:3000");
+// 🚀 PORT FIX (IMPORTANT FOR RENDER)
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
