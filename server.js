@@ -5,6 +5,7 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
+const https = require('https');
 
 const app = express();
 
@@ -17,7 +18,7 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 /* =========================
-   DRY ERROR HANDLER 🔥
+   DRY ERROR HANDLER
 ========================= */
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((err) => {
@@ -71,7 +72,6 @@ const productSchema = new mongoose.Schema({
   category: { type: String, index: true },
 }, { timestamps: true });
 
-// 🔥 TEXT INDEX FOR SEARCH
 productSchema.index({ name: "text" });
 
 const Product = mongoose.model('Product', productSchema);
@@ -92,24 +92,40 @@ const orderSchema = new mongoose.Schema({
 const Order = mongoose.model('Order', orderSchema);
 
 /* =========================
-   IMAGE UPLOAD
+   CLOUDINARY UPLOAD FUNCTION (DRY 🔥)
 ========================= */
-
-app.post('/upload', upload.single('image'), asyncHandler(async (req, res) => {
-
-  const result = await new Promise((resolve, reject) => {
+const uploadToCloudinary = (buffer) => {
+  return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
         folder: "rolling_products",
-        transformation: [{ width: 400, crop: "scale", quality: "auto" }]
+        transformation: [
+          { width: 400, crop: "scale" },
+          { quality: "auto", fetch_format: "auto" }
+        ]
       },
       (error, result) => {
         if (result) resolve(result);
         else reject(error);
       }
     );
-    stream.end(req.file.buffer);
+    stream.end(buffer);
   });
+};
+
+/* =========================
+   IMAGE UPLOAD
+========================= */
+app.post('/upload', upload.single('image'), asyncHandler(async (req, res) => {
+
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: "Image file required"
+    });
+  }
+
+  const result = await uploadToCloudinary(req.file.buffer);
 
   res.json({
     success: true,
@@ -133,19 +149,7 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
     });
   }
 
-  const result = await new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: "rolling_products",
-        transformation: [{ width: 400, crop: "scale", quality: "auto" }]
-      },
-      (error, result) => {
-        if (result) resolve(result);
-        else reject(error);
-      }
-    );
-    stream.end(req.file.buffer);
-  });
+  const result = await uploadToCloudinary(req.file.buffer);
 
   const product = await Product.create({
     name,
@@ -161,7 +165,7 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
   });
 }));
 
-// 📄 GET ALL PRODUCTS (FAST)
+// 📄 GET ALL PRODUCTS
 app.get('/products', asyncHandler(async (req, res) => {
 
   const products = await Product.find()
@@ -176,7 +180,7 @@ app.get('/products', asyncHandler(async (req, res) => {
   });
 }));
 
-// 🔍 SEARCH PRODUCTS
+// 🔍 SEARCH
 app.get('/search', asyncHandler(async (req, res) => {
 
   const q = req.query.q;
@@ -201,7 +205,7 @@ app.get('/search', asyncHandler(async (req, res) => {
   });
 }));
 
-// 📂 FILTER BY CATEGORY
+// 📂 CATEGORY
 app.get('/products/category/:category', asyncHandler(async (req, res) => {
 
   const products = await Product.find({
@@ -217,7 +221,7 @@ app.get('/products/category/:category', asyncHandler(async (req, res) => {
   });
 }));
 
-// 📄 SINGLE PRODUCT
+// 📄 SINGLE
 app.get('/product/:id', asyncHandler(async (req, res) => {
 
   const product = await Product.findById(req.params.id).lean();
@@ -238,7 +242,7 @@ app.get('/product/:id', asyncHandler(async (req, res) => {
 // ❌ DELETE
 app.delete('/product/:id', asyncHandler(async (req, res) => {
   await Product.findByIdAndDelete(req.params.id);
-  res.json({ success: true, message: "Deleted" });
+  res.json({ success: true });
 }));
 
 /* =========================
@@ -292,6 +296,17 @@ app.delete('/order/:id', asyncHandler(async (req, res) => {
   await Order.findByIdAndDelete(req.params.id);
   res.json({ success: true });
 }));
+
+/* =========================
+   KEEP ALIVE (Render fix 🔥)
+========================= */
+setInterval(() => {
+  https.get("https://rolling-bnd6.onrender.com", (res) => {
+    console.log("🔁 Ping:", res.statusCode);
+  }).on('error', (err) => {
+    console.error("Ping failed:", err.message);
+  });
+}, 14 * 60 * 1000);
 
 /* =========================
    SERVER
