@@ -18,7 +18,7 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 /* =========================
-   DRY ERROR HANDLER
+   ERROR HANDLER
 ========================= */
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((err) => {
@@ -31,7 +31,7 @@ const asyncHandler = (fn) => (req, res, next) => {
 };
 
 /* =========================
-   CLOUDINARY CONFIG
+   CLOUDINARY
 ========================= */
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -40,7 +40,7 @@ cloudinary.config({
 });
 
 /* =========================
-   ROOT + HEALTH
+   ROOT
 ========================= */
 app.get('/', (req, res) => {
   res.send("🚀 Rolling Backend API is LIVE");
@@ -64,10 +64,11 @@ mongoose.connect(process.env.MONGO_URL)
    MODELS
 ========================= */
 
-// PRODUCT
+// ✅ UPDATED PRODUCT MODEL (WITH DISCOUNT)
 const productSchema = new mongoose.Schema({
   name: { type: String, index: true },
-  price: Number,
+  price: { type: Number, required: true },
+  oldPrice: { type: Number }, // 🔥 NEW FIELD
   image: String,
   category: { type: String, index: true },
 }, { timestamps: true });
@@ -92,7 +93,7 @@ const orderSchema = new mongoose.Schema({
 const Order = mongoose.model('Order', orderSchema);
 
 /* =========================
-   CLOUDINARY UPLOAD FUNCTION (DRY 🔥)
+   CLOUDINARY UPLOAD
 ========================= */
 const uploadToCloudinary = (buffer) => {
   return new Promise((resolve, reject) => {
@@ -134,13 +135,13 @@ app.post('/upload', upload.single('image'), asyncHandler(async (req, res) => {
 }));
 
 /* =========================
-   PRODUCT ROUTES (FAST 🚀)
+   PRODUCT ROUTES
 ========================= */
 
-// ➕ CREATE PRODUCT
+// ✅ CREATE PRODUCT (UPDATED)
 app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
 
-  const { name, price, category } = req.body;
+  const { name, price, oldPrice, category } = req.body;
 
   if (!name || !price || !req.file) {
     return res.status(400).json({
@@ -154,6 +155,7 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
   const product = await Product.create({
     name,
     price,
+    oldPrice: oldPrice || Math.round(price * 1.2), // 🔥 AUTO DISCOUNT
     category,
     image: result.secure_url
   });
@@ -165,7 +167,7 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
   });
 }));
 
-// 📄 GET ALL PRODUCTS
+// GET ALL PRODUCTS
 app.get('/products', asyncHandler(async (req, res) => {
 
   const products = await Product.find()
@@ -180,7 +182,7 @@ app.get('/products', asyncHandler(async (req, res) => {
   });
 }));
 
-// 🔍 SEARCH
+// SEARCH
 app.get('/search', asyncHandler(async (req, res) => {
 
   const q = req.query.q;
@@ -194,9 +196,7 @@ app.get('/search', asyncHandler(async (req, res) => {
 
   const products = await Product.find({
     $text: { $search: q }
-  })
-    .limit(20)
-    .lean();
+  }).limit(20).lean();
 
   res.json({
     success: true,
@@ -205,14 +205,12 @@ app.get('/search', asyncHandler(async (req, res) => {
   });
 }));
 
-// 📂 CATEGORY
+// CATEGORY
 app.get('/products/category/:category', asyncHandler(async (req, res) => {
 
   const products = await Product.find({
     category: req.params.category
-  })
-    .limit(50)
-    .lean();
+  }).limit(50).lean();
 
   res.json({
     success: true,
@@ -221,7 +219,7 @@ app.get('/products/category/:category', asyncHandler(async (req, res) => {
   });
 }));
 
-// 📄 SINGLE
+// SINGLE
 app.get('/product/:id', asyncHandler(async (req, res) => {
 
   const product = await Product.findById(req.params.id).lean();
@@ -239,7 +237,7 @@ app.get('/product/:id', asyncHandler(async (req, res) => {
   });
 }));
 
-// ❌ DELETE
+// DELETE
 app.delete('/product/:id', asyncHandler(async (req, res) => {
   await Product.findByIdAndDelete(req.params.id);
   res.json({ success: true });
@@ -298,20 +296,15 @@ app.delete('/order/:id', asyncHandler(async (req, res) => {
 }));
 
 /* =========================
-   KEEP ALIVE (Render fix 🔥)
+   KEEP ALIVE
 ========================= */
 setInterval(() => {
-  https.get("https://rolling-bnd6.onrender.com", (res) => {
-    console.log("🔁 Ping:", res.statusCode);
-  }).on('error', (err) => {
-    console.error("Ping failed:", err.message);
-  });
+  https.get("https://rolling-bnd6.onrender.com", () => {});
 }, 14 * 60 * 1000);
 
 /* =========================
    SERVER
 ========================= */
-
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
