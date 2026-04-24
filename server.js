@@ -46,10 +46,6 @@ app.get('/', (req, res) => {
   res.send("🚀 Rolling Backend API is LIVE");
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: "OK" });
-});
-
 /* =========================
    MONGODB
 ========================= */
@@ -64,13 +60,13 @@ mongoose.connect(process.env.MONGO_URL)
    MODELS
 ========================= */
 
-// ✅ UPDATED PRODUCT MODEL (WITH DISCOUNT)
+// PRODUCT
 const productSchema = new mongoose.Schema({
   name: { type: String, index: true },
   price: { type: Number, required: true },
-  oldPrice: { type: Number }, // 🔥 NEW FIELD
+  oldPrice: Number,
   image: String,
-  category: { type: String, index: true },
+  category: String,
 }, { timestamps: true });
 
 productSchema.index({ name: "text" });
@@ -92,6 +88,9 @@ const orderSchema = new mongoose.Schema({
 
 const Order = mongoose.model('Order', orderSchema);
 
+// ✅ USER ACTIVITY MODEL
+const UserActivity = require('./models/user_activity');
+
 /* =========================
    CLOUDINARY UPLOAD
 ========================= */
@@ -102,7 +101,7 @@ const uploadToCloudinary = (buffer) => {
         folder: "rolling_products",
         transformation: [
           { width: 400, crop: "scale" },
-          { quality: "auto", fetch_format: "auto" }
+          { quality: "auto" }
         ]
       },
       (error, result) => {
@@ -115,30 +114,10 @@ const uploadToCloudinary = (buffer) => {
 };
 
 /* =========================
-   IMAGE UPLOAD
-========================= */
-app.post('/upload', upload.single('image'), asyncHandler(async (req, res) => {
-
-  if (!req.file) {
-    return res.status(400).json({
-      success: false,
-      message: "Image file required"
-    });
-  }
-
-  const result = await uploadToCloudinary(req.file.buffer);
-
-  res.json({
-    success: true,
-    imageUrl: result.secure_url
-  });
-}));
-
-/* =========================
    PRODUCT ROUTES
 ========================= */
 
-// ✅ CREATE PRODUCT (UPDATED)
+// CREATE PRODUCT
 app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
 
   const { name, price, oldPrice, category } = req.body;
@@ -155,14 +134,13 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
   const product = await Product.create({
     name,
     price,
-    oldPrice: oldPrice || Math.round(price * 1.2), // 🔥 AUTO DISCOUNT
+    oldPrice: oldPrice || Math.round(price * 1.2),
     category,
     image: result.secure_url
   });
 
   res.status(201).json({
     success: true,
-    message: "Product created 🚀",
     data: product
   });
 }));
@@ -172,57 +150,18 @@ app.get('/products', asyncHandler(async (req, res) => {
 
   const products = await Product.find()
     .sort({ createdAt: -1 })
-    .limit(100)
-    .lean();
+    .limit(100);
 
   res.json({
     success: true,
-    count: products.length,
     data: products
   });
 }));
 
-// SEARCH
-app.get('/search', asyncHandler(async (req, res) => {
-
-  const q = req.query.q;
-
-  if (!q) {
-    return res.status(400).json({
-      success: false,
-      message: "Search query required"
-    });
-  }
-
-  const products = await Product.find({
-    $text: { $search: q }
-  }).limit(20).lean();
-
-  res.json({
-    success: true,
-    count: products.length,
-    data: products
-  });
-}));
-
-// CATEGORY
-app.get('/products/category/:category', asyncHandler(async (req, res) => {
-
-  const products = await Product.find({
-    category: req.params.category
-  }).limit(50).lean();
-
-  res.json({
-    success: true,
-    count: products.length,
-    data: products
-  });
-}));
-
-// SINGLE
+// GET SINGLE PRODUCT + TRACK VIEW
 app.get('/product/:id', asyncHandler(async (req, res) => {
 
-  const product = await Product.findById(req.params.id).lean();
+  const product = await Product.findById(req.params.id);
 
   if (!product) {
     return res.status(404).json({
@@ -231,16 +170,18 @@ app.get('/product/:id', asyncHandler(async (req, res) => {
     });
   }
 
+  // 🔥 TRACK VIEW
+  await UserActivity.create({
+    userId: req.headers.userid || "guest",
+    productId: product._id,
+    category: product.category,
+    action: "view"
+  });
+
   res.json({
     success: true,
     data: product
   });
-}));
-
-// DELETE
-app.delete('/product/:id', asyncHandler(async (req, res) => {
-  await Product.findByIdAndDelete(req.params.id);
-  res.json({ success: true });
 }));
 
 /* =========================
@@ -249,7 +190,7 @@ app.delete('/product/:id', asyncHandler(async (req, res) => {
 
 app.post('/order', asyncHandler(async (req, res) => {
 
-  const { type, items, total, riderNearby } = req.body;
+  const { type, items, total, riderNearby, userId } = req.body;
 
   const order = await Order.create({
     type,
@@ -258,41 +199,84 @@ app.post('/order', asyncHandler(async (req, res) => {
     deliveryFee: riderNearby ? 0 : 5,
   });
 
+  // 🔥 TRACK ORDER
+  for (const item of items) {
+    await UserActivity.create({
+      userId: userId || "guest",
+      productId: item.name,
+      action: "order"
+    });
+  }
+
   res.json({
     success: true,
     order
   });
 }));
 
-app.get('/orders', asyncHandler(async (req, res) => {
+/* =========================
+   MANUAL TRACK API
+========================= */
 
-  const orders = await Order.find()
-    .sort({ createdAt: -1 })
-    .lean();
+app.post('/track', asyncHandler(async (req, res) => {
+
+  const { userId, productId, category, action } = req.body;
+
+  if (!userId || !action) {
+    return res.status(400).json({
+      success: false,
+      message: "userId & action required"
+    });
+  }
+
+  await UserActivity.create({
+    userId,
+    productId,
+    category,
+    action
+  });
 
   res.json({
     success: true,
-    data: orders
+    message: "Tracked"
   });
 }));
 
-app.put('/order/:id', asyncHandler(async (req, res) => {
+/* =========================
+   🔥 RECOMMENDATION API
+========================= */
 
-  const order = await Order.findByIdAndUpdate(
-    req.params.id,
-    { status: req.body.status },
-    { new: true }
-  );
+app.get('/recommend/:userId', asyncHandler(async (req, res) => {
+
+  const userId = req.params.userId;
+
+  const activities = await UserActivity.find({ userId });
+
+  if (activities.length === 0) {
+    const products = await Product.find().limit(10);
+    return res.json({ success: true, data: products });
+  }
+
+  const categoryCount = {};
+
+  activities.forEach(a => {
+    if (!a.category) return;
+    categoryCount[a.category] = (categoryCount[a.category] || 0) + 1;
+  });
+
+  const topCategory = Object.keys(categoryCount).sort(
+    (a, b) => categoryCount[b] - categoryCount[a]
+  )[0];
+
+  const recommended = await Product.find({
+    category: topCategory
+  }).limit(10);
 
   res.json({
     success: true,
-    data: order
+    category: topCategory,
+    data: recommended
   });
-}));
-
-app.delete('/order/:id', asyncHandler(async (req, res) => {
-  await Order.findByIdAndDelete(req.params.id);
-  res.json({ success: true });
 }));
 
 /* =========================
