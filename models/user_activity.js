@@ -1,15 +1,57 @@
 const mongoose = require('mongoose');
 
 const userActivitySchema = new mongoose.Schema({
-  userId: String,
-  productId: String,
-  action: String, // view | add_to_cart | order
-  category: String,
+  ////////////////////////////////////////////////////
+  /// 👤 USER
+  ////////////////////////////////////////////////////
+  userId: {
+    type: String,
+    required: true,
+    index: true, // 🔥 fast queries
+  },
 
+  ////////////////////////////////////////////////////
+  /// 📦 PRODUCT
+  ////////////////////////////////////////////////////
+  productId: {
+    type: mongoose.Schema.Types.ObjectId, // ✅ FIXED (important)
+    ref: 'Product',
+    required: true,
+    index: true,
+  },
+
+  ////////////////////////////////////////////////////
+  /// 🎯 ACTION
+  ////////////////////////////////////////////////////
+  action: {
+    type: String,
+    enum: ['view', 'add_to_cart', 'order'],
+    required: true,
+    index: true,
+  },
+
+  ////////////////////////////////////////////////////
+  /// 🏷 CATEGORY
+  ////////////////////////////////////////////////////
+  category: {
+    type: String,
+    index: true,
+  },
+
+  ////////////////////////////////////////////////////
+  /// ⏱ TIME
+  ////////////////////////////////////////////////////
   createdAt: {
     type: Date,
     default: Date.now,
+    index: true,
   },
 });
+
+////////////////////////////////////////////////////
+/// 🔥 INDEXES (VERY IMPORTANT)
+////////////////////////////////////////////////////
+userActivitySchema.index({ userId: 1, action: 1 });
+userActivitySchema.index({ userId: 1, category: 1 });
 
 module.exports = mongoose.model('UserActivity', userActivitySchema);

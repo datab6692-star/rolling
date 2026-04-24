@@ -9,17 +9,17 @@ const https = require('https');
 
 const app = express();
 
-/* =========================
-   MIDDLEWARE
-========================= */
+////////////////////////////////////////////////////
+/// MIDDLEWARE
+////////////////////////////////////////////////////
 app.use(cors());
 app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-/* =========================
-   ERROR HANDLER
-========================= */
+////////////////////////////////////////////////////
+/// ERROR HANDLER
+////////////////////////////////////////////////////
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((err) => {
     console.error("❌ Error:", err.message);
@@ -30,25 +30,25 @@ const asyncHandler = (fn) => (req, res, next) => {
   });
 };
 
-/* =========================
-   CLOUDINARY
-========================= */
+////////////////////////////////////////////////////
+/// CLOUDINARY
+////////////////////////////////////////////////////
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-/* =========================
-   ROOT
-========================= */
+////////////////////////////////////////////////////
+/// ROOT
+////////////////////////////////////////////////////
 app.get('/', (req, res) => {
   res.send("🚀 Rolling Backend API is LIVE");
 });
 
-/* =========================
-   MONGODB
-========================= */
+////////////////////////////////////////////////////
+/// MONGODB
+////////////////////////////////////////////////////
 mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log("✅ MongoDB Connected"))
   .catch((err) => {
@@ -56,11 +56,9 @@ mongoose.connect(process.env.MONGO_URL)
     process.exit(1);
   });
 
-/* =========================
-   MODELS
-========================= */
-
-// PRODUCT
+////////////////////////////////////////////////////
+/// MODELS
+////////////////////////////////////////////////////
 const productSchema = new mongoose.Schema({
   name: { type: String, index: true },
   price: { type: Number, required: true },
@@ -73,7 +71,6 @@ productSchema.index({ name: "text" });
 
 const Product = mongoose.model('Product', productSchema);
 
-// ORDER
 const orderSchema = new mongoose.Schema({
   type: String,
   items: Array,
@@ -88,12 +85,11 @@ const orderSchema = new mongoose.Schema({
 
 const Order = mongoose.model('Order', orderSchema);
 
-// ✅ USER ACTIVITY MODEL
 const UserActivity = require('./models/user_activity');
 
-/* =========================
-   CLOUDINARY UPLOAD
-========================= */
+////////////////////////////////////////////////////
+/// CLOUDINARY UPLOAD
+////////////////////////////////////////////////////
 const uploadToCloudinary = (buffer) => {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
@@ -113,13 +109,12 @@ const uploadToCloudinary = (buffer) => {
   });
 };
 
-/* =========================
-   PRODUCT ROUTES
-========================= */
+////////////////////////////////////////////////////
+/// PRODUCT ROUTES
+////////////////////////////////////////////////////
 
 // CREATE PRODUCT
 app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
-
   const { name, price, oldPrice, category } = req.body;
 
   if (!name || !price || !req.file) {
@@ -139,28 +134,20 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
     image: result.secure_url
   });
 
-  res.status(201).json({
-    success: true,
-    data: product
-  });
+  res.status(201).json({ success: true, data: product });
 }));
 
-// GET ALL PRODUCTS
+// GET PRODUCTS
 app.get('/products', asyncHandler(async (req, res) => {
-
   const products = await Product.find()
     .sort({ createdAt: -1 })
     .limit(100);
 
-  res.json({
-    success: true,
-    data: products
-  });
+  res.json({ success: true, data: products });
 }));
 
-// GET SINGLE PRODUCT + TRACK VIEW
+// GET SINGLE + TRACK
 app.get('/product/:id', asyncHandler(async (req, res) => {
-
   const product = await Product.findById(req.params.id);
 
   if (!product) {
@@ -170,26 +157,20 @@ app.get('/product/:id', asyncHandler(async (req, res) => {
     });
   }
 
-  // 🔥 TRACK VIEW
   await UserActivity.create({
     userId: req.headers.userid || "guest",
-    productId: product._id,
+    productId: product._id, // ✅ ObjectId
     category: product.category,
     action: "view"
   });
 
-  res.json({
-    success: true,
-    data: product
-  });
+  res.json({ success: true, data: product });
 }));
 
-/* =========================
-   ORDER ROUTES
-========================= */
-
+////////////////////////////////////////////////////
+/// ORDER ROUTES
+////////////////////////////////////////////////////
 app.post('/order', asyncHandler(async (req, res) => {
-
   const { type, items, total, riderNearby, userId } = req.body;
 
   const order = await Order.create({
@@ -199,61 +180,59 @@ app.post('/order', asyncHandler(async (req, res) => {
     deliveryFee: riderNearby ? 0 : 5,
   });
 
-  // 🔥 TRACK ORDER
   for (const item of items) {
+    if (!item.id) continue; // ✅ safety
+
     await UserActivity.create({
       userId: userId || "guest",
-      productId: item.name,
+      productId: new mongoose.Types.ObjectId(item.id), // ✅ FIXED
+      category: item.category || null,
       action: "order"
     });
   }
 
-  res.json({
-    success: true,
-    order
-  });
+  res.json({ success: true, order });
 }));
 
-/* =========================
-   MANUAL TRACK API
-========================= */
-
+////////////////////////////////////////////////////
+/// TRACK API
+////////////////////////////////////////////////////
 app.post('/track', asyncHandler(async (req, res) => {
-
   const { userId, productId, category, action } = req.body;
 
-  if (!userId || !action) {
+  if (!userId || !productId || !action) {
     return res.status(400).json({
       success: false,
-      message: "userId & action required"
+      message: "userId, productId & action required"
     });
   }
 
   await UserActivity.create({
     userId,
-    productId,
+    productId: new mongoose.Types.ObjectId(productId), // ✅ FIXED
     category,
     action
   });
 
-  res.json({
-    success: true,
-    message: "Tracked"
-  });
+  res.json({ success: true });
 }));
 
-/* =========================
-   🔥 RECOMMENDATION API
-========================= */
-
+////////////////////////////////////////////////////
+/// RECOMMENDATION API
+////////////////////////////////////////////////////
 app.get('/recommend/:userId', asyncHandler(async (req, res) => {
-
   const userId = req.params.userId;
 
-  const activities = await UserActivity.find({ userId });
+  const activities = await UserActivity.find({
+    userId,
+    action: "view"
+  });
 
   if (activities.length === 0) {
-    const products = await Product.find().limit(10);
+    const products = await Product.find()
+      .sort({ createdAt: -1 })
+      .limit(10);
+
     return res.json({ success: true, data: products });
   }
 
@@ -270,7 +249,9 @@ app.get('/recommend/:userId', asyncHandler(async (req, res) => {
 
   const recommended = await Product.find({
     category: topCategory
-  }).limit(10);
+  })
+    .sort({ createdAt: -1 })
+    .limit(10);
 
   res.json({
     success: true,
@@ -279,16 +260,16 @@ app.get('/recommend/:userId', asyncHandler(async (req, res) => {
   });
 }));
 
-/* =========================
-   KEEP ALIVE
-========================= */
+////////////////////////////////////////////////////
+/// KEEP ALIVE
+////////////////////////////////////////////////////
 setInterval(() => {
   https.get("https://rolling-bnd6.onrender.com", () => {});
 }, 14 * 60 * 1000);
 
-/* =========================
-   SERVER
-========================= */
+////////////////////////////////////////////////////
+/// SERVER
+////////////////////////////////////////////////////
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
