@@ -67,7 +67,8 @@ const productSchema = new mongoose.Schema({
   category: String,
 }, { timestamps: true });
 
-productSchema.index({ name: "text" });
+/// 🔥 TEXT INDEX FOR FAST SEARCH
+productSchema.index({ name: "text", category: "text" });
 
 const Product = mongoose.model('Product', productSchema);
 
@@ -110,10 +111,45 @@ const uploadToCloudinary = (buffer) => {
 };
 
 ////////////////////////////////////////////////////
+/// 🔥 SEARCH API (PRO VERSION)
+////////////////////////////////////////////////////
+app.get('/search', asyncHandler(async (req, res) => {
+  const query = req.query.q;
+
+  if (!query || query.trim() === "") {
+    return res.json({ success: true, data: [] });
+  }
+
+  // 🔥 1. TEXT SEARCH (FAST)
+  let products = await Product.find(
+    { $text: { $search: query } },
+    { score: { $meta: "textScore" } }
+  )
+    .sort({ score: { $meta: "textScore" } })
+    .limit(20);
+
+  // 🔥 2. FALLBACK (if no result)
+  if (products.length === 0) {
+    products = await Product.find({
+      $or: [
+        { name: { $regex: query, $options: 'i' } },
+        { category: { $regex: query, $options: 'i' } }
+      ]
+    })
+      .sort({ createdAt: -1 })
+      .limit(20);
+  }
+
+  res.json({
+    success: true,
+    count: products.length,
+    data: products
+  });
+}));
+
+////////////////////////////////////////////////////
 /// PRODUCT ROUTES
 ////////////////////////////////////////////////////
-
-// CREATE PRODUCT
 app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
   const { name, price, oldPrice, category } = req.body;
 
@@ -137,7 +173,6 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: product });
 }));
 
-// GET PRODUCTS
 app.get('/products', asyncHandler(async (req, res) => {
   const products = await Product.find()
     .sort({ createdAt: -1 })
@@ -146,7 +181,6 @@ app.get('/products', asyncHandler(async (req, res) => {
   res.json({ success: true, data: products });
 }));
 
-// GET SINGLE + TRACK
 app.get('/product/:id', asyncHandler(async (req, res) => {
   const product = await Product.findById(req.params.id);
 
@@ -159,7 +193,7 @@ app.get('/product/:id', asyncHandler(async (req, res) => {
 
   await UserActivity.create({
     userId: req.headers.userid || "guest",
-    productId: product._id, // ✅ ObjectId
+    productId: product._id,
     category: product.category,
     action: "view"
   });
@@ -181,11 +215,11 @@ app.post('/order', asyncHandler(async (req, res) => {
   });
 
   for (const item of items) {
-    if (!item.id) continue; // ✅ safety
+    if (!item.id) continue;
 
     await UserActivity.create({
       userId: userId || "guest",
-      productId: new mongoose.Types.ObjectId(item.id), // ✅ FIXED
+      productId: new mongoose.Types.ObjectId(item.id),
       category: item.category || null,
       action: "order"
     });
@@ -209,7 +243,7 @@ app.post('/track', asyncHandler(async (req, res) => {
 
   await UserActivity.create({
     userId,
-    productId: new mongoose.Types.ObjectId(productId), // ✅ FIXED
+    productId: new mongoose.Types.ObjectId(productId),
     category,
     action
   });
