@@ -18,14 +18,15 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 ////////////////////////////////////////////////////
-/// ERROR HANDLER
+/// ERROR HANDLER (IMPROVED)
 ////////////////////////////////////////////////////
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((err) => {
-    console.error("❌ Error:", err.message);
+    console.error("❌ Error:", err);
+
     res.status(500).json({
       success: false,
-      message: err.message || "Server Error"
+      message: err.message || "Server Error",
     });
   });
 };
@@ -64,9 +65,13 @@ const productSchema = new mongoose.Schema({
   price: { type: Number, required: true },
   oldPrice: Number,
   image: String,
-  category: String,
+  category: {
+    type: String,
+    index: true, // 🔥 faster category filter
+  },
 }, { timestamps: true });
 
+/// 🔥 SEARCH INDEX
 productSchema.index({ name: "text", category: "text" });
 
 const Product = mongoose.model('Product', productSchema);
@@ -110,7 +115,7 @@ const uploadToCloudinary = (buffer) => {
 };
 
 ////////////////////////////////////////////////////
-/// 🔥 SEARCH API
+/// 🔥 SEARCH API (UPGRADED)
 ////////////////////////////////////////////////////
 app.get('/search', asyncHandler(async (req, res) => {
   const query = req.query.q;
@@ -126,6 +131,7 @@ app.get('/search', asyncHandler(async (req, res) => {
     .sort({ score: { $meta: "textScore" } })
     .limit(20);
 
+  /// 🔥 FALLBACK
   if (products.length === 0) {
     products = await Product.find({
       $or: [
@@ -135,7 +141,11 @@ app.get('/search', asyncHandler(async (req, res) => {
     }).limit(20);
   }
 
-  res.json({ success: true, data: products });
+  res.json({
+    success: true,
+    count: products.length,
+    data: products
+  });
 }));
 
 ////////////////////////////////////////////////////
@@ -157,29 +167,35 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
     name,
     price,
     oldPrice: oldPrice || Math.round(price * 1.2),
-    category,
+    category: category?.trim(), // 🔥 clean input
     image: result.secure_url
   });
 
-  res.status(201).json({ success: true, data: product });
+  res.status(201).json({
+    success: true,
+    data: product
+  });
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 GET PRODUCTS (WITH CATEGORY FILTER) ✅ MAIN FIX
+/// 🔥 GET PRODUCTS (PRO VERSION 🔥)
 ////////////////////////////////////////////////////
 app.get('/products', asyncHandler(async (req, res) => {
-  const { category } = req.query;
+  const { category, limit = 100 } = req.query;
 
   let filter = {};
 
-  /// ✅ CATEGORY FILTER (CASE-INSENSITIVE)
+  /// 🔥 CATEGORY FILTER (SMART)
   if (category) {
-    filter.category = { $regex: `^${category}$`, $options: 'i' };
+    filter.category = {
+      $regex: `^${category.trim()}$`,
+      $options: 'i'
+    };
   }
 
   const products = await Product.find(filter)
     .sort({ createdAt: -1 })
-    .limit(100);
+    .limit(Number(limit));
 
   res.json({
     success: true,
@@ -189,7 +205,7 @@ app.get('/products', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// GET SINGLE PRODUCT
+/// 🔥 GET SINGLE PRODUCT
 ////////////////////////////////////////////////////
 app.get('/product/:id', asyncHandler(async (req, res) => {
   const product = await Product.findById(req.params.id);
@@ -212,7 +228,7 @@ app.get('/product/:id', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// ORDER
+/// 🔥 ORDER
 ////////////////////////////////////////////////////
 app.post('/order', asyncHandler(async (req, res) => {
   const { type, items, total, riderNearby, userId } = req.body;
@@ -239,7 +255,7 @@ app.post('/order', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// TRACK
+/// 🔥 TRACK
 ////////////////////////////////////////////////////
 app.post('/track', asyncHandler(async (req, res) => {
   const { userId, productId, category, action } = req.body;
@@ -262,7 +278,7 @@ app.post('/track', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// RECOMMENDATION
+/// 🔥 RECOMMENDATION
 ////////////////////////////////////////////////////
 app.get('/recommend/:userId', asyncHandler(async (req, res) => {
   const userId = req.params.userId;
