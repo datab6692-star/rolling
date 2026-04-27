@@ -25,7 +25,7 @@ const asyncHandler = (fn) => (req, res, next) => {
     console.error("❌ Error:", err.message);
     res.status(500).json({
       success: false,
-      message: err.message || "Server Error"
+      message: err.message || "Server Error",
     });
   });
 };
@@ -57,7 +57,33 @@ mongoose.connect(process.env.MONGO_URL)
   });
 
 ////////////////////////////////////////////////////
-/// MODELS
+/// 📍 DELIVERY CENTER (CHANGE THIS 🔥)
+////////////////////////////////////////////////////
+const STORE_LAT = 12.9716; // 👉 change to your shop location
+const STORE_LNG = 79.1588;
+
+////////////////////////////////////////////////////
+/// 📐 HAVERSINE (DISTANCE)
+////////////////////////////////////////////////////
+const getDistanceKm = (lat1, lon1, lat2, lon2) => {
+  const R = 6371;
+
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) ** 2;
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+};
+
+////////////////////////////////////////////////////
+/// MODELS (SAFE)
 ////////////////////////////////////////////////////
 const productSchema = new mongoose.Schema({
   name: { type: String, index: true },
@@ -67,10 +93,11 @@ const productSchema = new mongoose.Schema({
   category: String,
 }, { timestamps: true });
 
-/// 🔥 TEXT INDEX FOR FAST SEARCH
 productSchema.index({ name: "text", category: "text" });
 
-const Product = mongoose.model('Product', productSchema);
+const Product =
+  mongoose.models.Product ||
+  mongoose.model('Product', productSchema);
 
 const orderSchema = new mongoose.Schema({
   type: String,
@@ -84,7 +111,9 @@ const orderSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-const Order = mongoose.model('Order', orderSchema);
+const Order =
+  mongoose.models.Order ||
+  mongoose.model('Order', orderSchema);
 
 const UserActivity = require('./models/user_activity');
 
@@ -111,7 +140,34 @@ const uploadToCloudinary = (buffer) => {
 };
 
 ////////////////////////////////////////////////////
-/// 🔥 SEARCH API (PRO VERSION)
+/// 📍 CHECK DELIVERY ZONE
+////////////////////////////////////////////////////
+app.post('/check-zone', asyncHandler(async (req, res) => {
+  const { lat, lng } = req.body;
+
+  if (!lat || !lng) {
+    return res.status(400).json({
+      success: false,
+      message: "lat & lng required",
+    });
+  }
+
+  const distance = getDistanceKm(lat, lng, STORE_LAT, STORE_LNG);
+
+  const inZone = distance <= 2;
+
+  res.json({
+    success: true,
+    inZone,
+    distance: Number(distance.toFixed(2)),
+    message: inZone
+      ? "Delivery available 🚀"
+      : "Out of delivery zone",
+  });
+}));
+
+////////////////////////////////////////////////////
+/// 🔍 SEARCH
 ////////////////////////////////////////////////////
 app.get('/search', asyncHandler(async (req, res) => {
   const query = req.query.q;
@@ -120,7 +176,6 @@ app.get('/search', asyncHandler(async (req, res) => {
     return res.json({ success: true, data: [] });
   }
 
-  // 🔥 1. TEXT SEARCH (FAST)
   let products = await Product.find(
     { $text: { $search: query } },
     { score: { $meta: "textScore" } }
@@ -128,27 +183,20 @@ app.get('/search', asyncHandler(async (req, res) => {
     .sort({ score: { $meta: "textScore" } })
     .limit(20);
 
-  // 🔥 2. FALLBACK (if no result)
   if (products.length === 0) {
     products = await Product.find({
       $or: [
         { name: { $regex: query, $options: 'i' } },
         { category: { $regex: query, $options: 'i' } }
       ]
-    })
-      .sort({ createdAt: -1 })
-      .limit(20);
+    }).limit(20);
   }
 
-  res.json({
-    success: true,
-    count: products.length,
-    data: products
-  });
+  res.json({ success: true, data: products });
 }));
 
 ////////////////////////////////////////////////////
-/// PRODUCT ROUTES
+/// PRODUCTS
 ////////////////////////////////////////////////////
 app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
   const { name, price, oldPrice, category } = req.body;
@@ -181,28 +229,8 @@ app.get('/products', asyncHandler(async (req, res) => {
   res.json({ success: true, data: products });
 }));
 
-app.get('/product/:id', asyncHandler(async (req, res) => {
-  const product = await Product.findById(req.params.id);
-
-  if (!product) {
-    return res.status(404).json({
-      success: false,
-      message: "Product not found"
-    });
-  }
-
-  await UserActivity.create({
-    userId: req.headers.userid || "guest",
-    productId: product._id,
-    category: product.category,
-    action: "view"
-  });
-
-  res.json({ success: true, data: product });
-}));
-
 ////////////////////////////////////////////////////
-/// ORDER ROUTES
+/// ORDER
 ////////////////////////////////////////////////////
 app.post('/order', asyncHandler(async (req, res) => {
   const { type, items, total, riderNearby, userId } = req.body;
@@ -214,84 +242,15 @@ app.post('/order', asyncHandler(async (req, res) => {
     deliveryFee: riderNearby ? 0 : 5,
   });
 
-  for (const item of items) {
-    if (!item.id) continue;
-
-    await UserActivity.create({
-      userId: userId || "guest",
-      productId: new mongoose.Types.ObjectId(item.id),
-      category: item.category || null,
-      action: "order"
-    });
-  }
-
   res.json({ success: true, order });
 }));
 
 ////////////////////////////////////////////////////
-/// TRACK API
-////////////////////////////////////////////////////
-app.post('/track', asyncHandler(async (req, res) => {
-  const { userId, productId, category, action } = req.body;
-
-  if (!userId || !productId || !action) {
-    return res.status(400).json({
-      success: false,
-      message: "userId, productId & action required"
-    });
-  }
-
-  await UserActivity.create({
-    userId,
-    productId: new mongoose.Types.ObjectId(productId),
-    category,
-    action
-  });
-
-  res.json({ success: true });
-}));
-
-////////////////////////////////////////////////////
-/// RECOMMENDATION API
+/// RECOMMEND
 ////////////////////////////////////////////////////
 app.get('/recommend/:userId', asyncHandler(async (req, res) => {
-  const userId = req.params.userId;
-
-  const activities = await UserActivity.find({
-    userId,
-    action: "view"
-  });
-
-  if (activities.length === 0) {
-    const products = await Product.find()
-      .sort({ createdAt: -1 })
-      .limit(10);
-
-    return res.json({ success: true, data: products });
-  }
-
-  const categoryCount = {};
-
-  activities.forEach(a => {
-    if (!a.category) return;
-    categoryCount[a.category] = (categoryCount[a.category] || 0) + 1;
-  });
-
-  const topCategory = Object.keys(categoryCount).sort(
-    (a, b) => categoryCount[b] - categoryCount[a]
-  )[0];
-
-  const recommended = await Product.find({
-    category: topCategory
-  })
-    .sort({ createdAt: -1 })
-    .limit(10);
-
-  res.json({
-    success: true,
-    category: topCategory,
-    data: recommended
-  });
+  const products = await Product.find().limit(10);
+  res.json({ success: true, data: products });
 }));
 
 ////////////////////////////////////////////////////
