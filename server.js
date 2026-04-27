@@ -59,8 +59,8 @@ mongoose.connect(process.env.MONGO_URL)
 ////////////////////////////////////////////////////
 /// 📍 DELIVERY CENTER (CHANGE THIS 🔥)
 ////////////////////////////////////////////////////
-const STORE_LAT = 12.9716; // 👉 change to your shop location
-const STORE_LNG = 79.1588;
+const STORE_LAT = 17.425814; // 👉 change to your shop location
+const STORE_LNG = 78.649177;
 
 ////////////////////////////////////////////////////
 /// 📐 HAVERSINE (DISTANCE)
