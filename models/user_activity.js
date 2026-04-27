@@ -18,12 +18,11 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 ////////////////////////////////////////////////////
-/// ERROR HANDLER (IMPROVED)
+/// ERROR HANDLER
 ////////////////////////////////////////////////////
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((err) => {
     console.error("❌ Error:", err);
-
     res.status(500).json({
       success: false,
       message: err.message || "Server Error",
@@ -65,13 +64,9 @@ const productSchema = new mongoose.Schema({
   price: { type: Number, required: true },
   oldPrice: Number,
   image: String,
-  category: {
-    type: String,
-    index: true, // 🔥 faster category filter
-  },
+  category: { type: String, index: true },
 }, { timestamps: true });
 
-/// 🔥 SEARCH INDEX
 productSchema.index({ name: "text", category: "text" });
 
 const Product = mongoose.model('Product', productSchema);
@@ -115,7 +110,7 @@ const uploadToCloudinary = (buffer) => {
 };
 
 ////////////////////////////////////////////////////
-/// 🔥 SEARCH API (UPGRADED)
+/// 🔍 SEARCH
 ////////////////////////////////////////////////////
 app.get('/search', asyncHandler(async (req, res) => {
   const query = req.query.q;
@@ -131,7 +126,6 @@ app.get('/search', asyncHandler(async (req, res) => {
     .sort({ score: { $meta: "textScore" } })
     .limit(20);
 
-  /// 🔥 FALLBACK
   if (products.length === 0) {
     products = await Product.find({
       $or: [
@@ -141,15 +135,11 @@ app.get('/search', asyncHandler(async (req, res) => {
     }).limit(20);
   }
 
-  res.json({
-    success: true,
-    count: products.length,
-    data: products
-  });
+  res.json({ success: true, data: products });
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 CREATE PRODUCT
+/// ➕ CREATE PRODUCT
 ////////////////////////////////////////////////////
 app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
   const { name, price, oldPrice, category } = req.body;
@@ -167,25 +157,21 @@ app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
     name,
     price,
     oldPrice: oldPrice || Math.round(price * 1.2),
-    category: category?.trim(), // 🔥 clean input
+    category: category?.trim(),
     image: result.secure_url
   });
 
-  res.status(201).json({
-    success: true,
-    data: product
-  });
+  res.status(201).json({ success: true, data: product });
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 GET PRODUCTS (PRO VERSION 🔥)
+/// 📦 GET PRODUCTS
 ////////////////////////////////////////////////////
 app.get('/products', asyncHandler(async (req, res) => {
   const { category, limit = 100 } = req.query;
 
   let filter = {};
 
-  /// 🔥 CATEGORY FILTER (SMART)
   if (category) {
     filter.category = {
       $regex: `^${category.trim()}$`,
@@ -197,88 +183,62 @@ app.get('/products', asyncHandler(async (req, res) => {
     .sort({ createdAt: -1 })
     .limit(Number(limit));
 
-  res.json({
-    success: true,
-    count: products.length,
-    data: products
-  });
+  res.json({ success: true, data: products });
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 GET SINGLE PRODUCT
+/// 📍 CHECK DELIVERY ZONE (🔥 NEW)
 ////////////////////////////////////////////////////
-app.get('/product/:id', asyncHandler(async (req, res) => {
-  const product = await Product.findById(req.params.id);
+app.post('/check-zone', asyncHandler(async (req, res) => {
+  const { lat, lng } = req.body;
 
-  if (!product) {
-    return res.status(404).json({
-      success: false,
-      message: "Product not found"
-    });
-  }
-
-  await UserActivity.create({
-    userId: req.headers.userid || "guest",
-    productId: product._id,
-    category: product.category,
-    action: "view"
-  });
-
-  res.json({ success: true, data: product });
-}));
-
-////////////////////////////////////////////////////
-/// 🔥 ORDER
-////////////////////////////////////////////////////
-app.post('/order', asyncHandler(async (req, res) => {
-  const { type, items, total, riderNearby, userId } = req.body;
-
-  const order = await Order.create({
-    type,
-    items,
-    total,
-    deliveryFee: riderNearby ? 0 : 5,
-  });
-
-  for (const item of items) {
-    if (!item.id) continue;
-
-    await UserActivity.create({
-      userId: userId || "guest",
-      productId: new mongoose.Types.ObjectId(item.id),
-      category: item.category,
-      action: "order"
-    });
-  }
-
-  res.json({ success: true, order });
-}));
-
-////////////////////////////////////////////////////
-/// 🔥 TRACK
-////////////////////////////////////////////////////
-app.post('/track', asyncHandler(async (req, res) => {
-  const { userId, productId, category, action } = req.body;
-
-  if (!userId || !productId || !action) {
+  if (!lat || !lng) {
     return res.status(400).json({
       success: false,
-      message: "userId, productId & action required"
+      message: "lat & lng required"
     });
   }
 
-  await UserActivity.create({
-    userId,
-    productId: new mongoose.Types.ObjectId(productId),
-    category,
-    action
-  });
+  // Example: Hyderabad center
+  const centerLat = 17.3850;
+  const centerLng = 78.4867;
+  const maxDistanceKm = 2;
 
-  res.json({ success: true });
+  const distance = getDistance(lat, lng, centerLat, centerLng);
+
+  const inZone = distance <= maxDistanceKm;
+
+  res.json({
+    success: true,
+    inZone,
+    distance: distance.toFixed(2),
+    message: inZone
+      ? "Delivery available 🚀"
+      : "Out of delivery zone"
+  });
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 RECOMMENDATION
+/// 📐 HAVERSINE FORMULA
+////////////////////////////////////////////////////
+function getDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2);
+
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+////////////////////////////////////////////////////
+/// 🎯 RECOMMENDATION
 ////////////////////////////////////////////////////
 app.get('/recommend/:userId', asyncHandler(async (req, res) => {
   const userId = req.params.userId;
@@ -308,11 +268,7 @@ app.get('/recommend/:userId', asyncHandler(async (req, res) => {
     category: topCategory
   }).limit(10);
 
-  res.json({
-    success: true,
-    category: topCategory,
-    data: recommended
-  });
+  res.json({ success: true, data: recommended });
 }));
 
 ////////////////////////////////////////////////////
