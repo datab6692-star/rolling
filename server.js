@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 const https = require('https');
+const axios = require('axios');
 
 const app = express();
 
@@ -57,13 +58,13 @@ mongoose.connect(process.env.MONGO_URL)
   });
 
 ////////////////////////////////////////////////////
-/// 📍 DELIVERY CENTER (CHANGE THIS 🔥)
+/// 📍 DELIVERY CENTER
 ////////////////////////////////////////////////////
-const STORE_LAT = 17.425814; // 👉 change to your shop location
+const STORE_LAT = 17.425814;
 const STORE_LNG = 78.649177;
 
 ////////////////////////////////////////////////////
-/// 📐 HAVERSINE (DISTANCE)
+/// 📐 DISTANCE
 ////////////////////////////////////////////////////
 const getDistanceKm = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
@@ -77,13 +78,11 @@ const getDistanceKm = (lat1, lon1, lat2, lon2) => {
     Math.cos(lat2 * Math.PI / 180) *
     Math.sin(dLon / 2) ** 2;
 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c;
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 
 ////////////////////////////////////////////////////
-/// MODELS (SAFE)
+/// MODELS
 ////////////////////////////////////////////////////
 const productSchema = new mongoose.Schema({
   name: { type: String, index: true },
@@ -115,30 +114,6 @@ const Order =
   mongoose.models.Order ||
   mongoose.model('Order', orderSchema);
 
-const UserActivity = require('./models/user_activity');
-
-////////////////////////////////////////////////////
-/// CLOUDINARY UPLOAD
-////////////////////////////////////////////////////
-const uploadToCloudinary = (buffer) => {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: "rolling_products",
-        transformation: [
-          { width: 400, crop: "scale" },
-          { quality: "auto" }
-        ]
-      },
-      (error, result) => {
-        if (result) resolve(result);
-        else reject(error);
-      }
-    );
-    stream.end(buffer);
-  });
-};
-
 ////////////////////////////////////////////////////
 /// 📍 CHECK DELIVERY ZONE
 ////////////////////////////////////////////////////
@@ -154,27 +129,45 @@ app.post('/check-zone', asyncHandler(async (req, res) => {
 
   const distance = getDistanceKm(lat, lng, STORE_LAT, STORE_LNG);
 
-  const inZone = distance <= 2;
-
   res.json({
     success: true,
-    inZone,
+    inZone: distance <= 2,
     distance: Number(distance.toFixed(2)),
-    message: inZone
-      ? "Delivery available 🚀"
-      : "Out of delivery zone",
   });
 }));
 
 ////////////////////////////////////////////////////
-/// 🔍 SEARCH
+/// 🔥 🔍 LOCATION SEARCH (NEW - IMPORTANT)
+////////////////////////////////////////////////////
+app.get('/place-search', asyncHandler(async (req, res) => {
+  const { query, lat, lon } = req.query;
+
+  if (!query) return res.json([]);
+
+  const userLat = lat || STORE_LAT;
+  const userLon = lon || STORE_LNG;
+
+  const url = `https://api.geoapify.com/v1/geocode/autocomplete?text=${query}&bias=proximity:${userLon},${userLat}&limit=10&apiKey=${process.env.GEOAPIFY_KEY}`;
+
+  const response = await axios.get(url);
+
+  const results = response.data.features.map((f) => ({
+    name: f.properties.name,
+    address: f.properties.formatted,
+    lat: f.properties.lat,
+    lon: f.properties.lon,
+  }));
+
+  res.json(results);
+}));
+
+////////////////////////////////////////////////////
+/// 🔍 PRODUCT SEARCH
 ////////////////////////////////////////////////////
 app.get('/search', asyncHandler(async (req, res) => {
   const query = req.query.q;
 
-  if (!query || query.trim() === "") {
-    return res.json({ success: true, data: [] });
-  }
+  if (!query) return res.json({ success: true, data: [] });
 
   let products = await Product.find(
     { $text: { $search: query } },
@@ -183,7 +176,7 @@ app.get('/search', asyncHandler(async (req, res) => {
     .sort({ score: { $meta: "textScore" } })
     .limit(20);
 
-  if (products.length === 0) {
+  if (!products.length) {
     products = await Product.find({
       $or: [
         { name: { $regex: query, $options: 'i' } },
@@ -198,34 +191,8 @@ app.get('/search', asyncHandler(async (req, res) => {
 ////////////////////////////////////////////////////
 /// PRODUCTS
 ////////////////////////////////////////////////////
-app.post('/product', upload.single('image'), asyncHandler(async (req, res) => {
-  const { name, price, oldPrice, category } = req.body;
-
-  if (!name || !price || !req.file) {
-    return res.status(400).json({
-      success: false,
-      message: "Name, price, image required"
-    });
-  }
-
-  const result = await uploadToCloudinary(req.file.buffer);
-
-  const product = await Product.create({
-    name,
-    price,
-    oldPrice: oldPrice || Math.round(price * 1.2),
-    category,
-    image: result.secure_url
-  });
-
-  res.status(201).json({ success: true, data: product });
-}));
-
 app.get('/products', asyncHandler(async (req, res) => {
-  const products = await Product.find()
-    .sort({ createdAt: -1 })
-    .limit(100);
-
+  const products = await Product.find().limit(100);
   res.json({ success: true, data: products });
 }));
 
@@ -233,7 +200,7 @@ app.get('/products', asyncHandler(async (req, res) => {
 /// ORDER
 ////////////////////////////////////////////////////
 app.post('/order', asyncHandler(async (req, res) => {
-  const { type, items, total, riderNearby, userId } = req.body;
+  const { type, items, total, riderNearby } = req.body;
 
   const order = await Order.create({
     type,
@@ -246,18 +213,10 @@ app.post('/order', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// RECOMMEND
-////////////////////////////////////////////////////
-app.get('/recommend/:userId', asyncHandler(async (req, res) => {
-  const products = await Product.find().limit(10);
-  res.json({ success: true, data: products });
-}));
-
-////////////////////////////////////////////////////
 /// KEEP ALIVE
 ////////////////////////////////////////////////////
 setInterval(() => {
-  https.get("https://rolling-bnd6.onrender.com", () => {});
+  https.get(process.env.BASE_URL || "https://rolling-bnd6.onrender.com", () => {});
 }, 14 * 60 * 1000);
 
 ////////////////////////////////////////////////////
