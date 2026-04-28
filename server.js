@@ -19,6 +19,11 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 ////////////////////////////////////////////////////
+/// DEBUG STARTUP
+////////////////////////////////////////////////////
+console.log("🔑 GEOAPIFY KEY:", process.env.GEOAPIFY_KEY ? "Loaded ✅" : "Missing ❌");
+
+////////////////////////////////////////////////////
 /// ERROR HANDLER
 ////////////////////////////////////////////////////
 const asyncHandler = (fn) => (req, res, next) => {
@@ -44,7 +49,7 @@ cloudinary.config({
 /// ROOT
 ////////////////////////////////////////////////////
 app.get('/', (req, res) => {
-  res.send("🚀 Rolling Backend API is LIVE");
+  res.send("🚀 Backend LIVE");
 });
 
 ////////////////////////////////////////////////////
@@ -137,28 +142,50 @@ app.post('/check-zone', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 🔍 LOCATION SEARCH (NEW - IMPORTANT)
+/// 🔥 🔍 LOCATION SEARCH (FIXED)
 ////////////////////////////////////////////////////
 app.get('/place-search', asyncHandler(async (req, res) => {
   const { query, lat, lon } = req.query;
 
-  if (!query) return res.json([]);
+  console.log("🔍 Query:", query, "Lat:", lat, "Lon:", lon);
+
+  if (!query || query.trim() === "") {
+    return res.json([]);
+  }
+
+  if (!process.env.GEOAPIFY_KEY) {
+    return res.status(500).json({
+      error: "Missing GEOAPIFY_KEY"
+    });
+  }
 
   const userLat = lat || STORE_LAT;
   const userLon = lon || STORE_LNG;
 
-  const url = `https://api.geoapify.com/v1/geocode/autocomplete?text=${query}&bias=proximity:${userLon},${userLat}&limit=10&apiKey=${process.env.GEOAPIFY_KEY}`;
+  const url = `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(query)}&bias=proximity:${userLon},${userLat}&limit=10&apiKey=${process.env.GEOAPIFY_KEY}`;
 
-  const response = await axios.get(url);
+  try {
+    const response = await axios.get(url, { timeout: 5000 });
 
-  const results = response.data.features.map((f) => ({
-    name: f.properties.name,
-    address: f.properties.formatted,
-    lat: f.properties.lat,
-    lon: f.properties.lon,
-  }));
+    const results = (response.data.features || []).map((f) => ({
+      name: f.properties.name || "Unknown",
+      address: f.properties.formatted || "",
+      lat: f.properties.lat,
+      lon: f.properties.lon,
+    }));
 
-  res.json(results);
+    console.log("✅ Results:", results.length);
+
+    res.json(results);
+
+  } catch (err) {
+    console.error("❌ Geoapify Error:", err.response?.data || err.message);
+
+    res.status(500).json({
+      error: "Geoapify failed",
+      details: err.message,
+    });
+  }
 }));
 
 ////////////////////////////////////////////////////
