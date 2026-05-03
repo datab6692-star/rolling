@@ -19,22 +19,18 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 ////////////////////////////////////////////////////
-/// DEBUG STARTUP
+/// DEBUG
 ////////////////////////////////////////////////////
-console.log("🔑 GEOAPIFY KEY:", process.env.GEOAPIFY_KEY ? "Loaded ✅" : "Missing ❌");
+console.log("🔑 GEOAPIFY:", process.env.GEOAPIFY_KEY ? "OK ✅" : "MISSING ❌");
 
 ////////////////////////////////////////////////////
-/// ERROR HANDLER
+/// ASYNC HANDLER
 ////////////////////////////////////////////////////
-const asyncHandler = (fn) => (req, res, next) => {
+const asyncHandler = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch((err) => {
-    console.error("❌ Error:", err.message);
-    res.status(500).json({
-      success: false,
-      message: err.message || "Server Error",
-    });
+    console.error("❌ ERROR:", err.message);
+    res.status(500).json({ success: false, message: err.message });
   });
-};
 
 ////////////////////////////////////////////////////
 /// CLOUDINARY
@@ -48,9 +44,7 @@ cloudinary.config({
 ////////////////////////////////////////////////////
 /// ROOT
 ////////////////////////////////////////////////////
-app.get('/', (req, res) => {
-  res.send("🚀 Backend LIVE");
-});
+app.get('/', (_, res) => res.send("🚀 Backend LIVE"));
 
 ////////////////////////////////////////////////////
 /// MONGODB
@@ -73,7 +67,6 @@ const STORE_LNG = 78.649177;
 ////////////////////////////////////////////////////
 const getDistanceKm = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
-
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
 
@@ -99,9 +92,7 @@ const productSchema = new mongoose.Schema({
 
 productSchema.index({ name: "text", category: "text" });
 
-const Product =
-  mongoose.models.Product ||
-  mongoose.model('Product', productSchema);
+const Product = mongoose.models.Product || mongoose.model('Product', productSchema);
 
 const orderSchema = new mongoose.Schema({
   type: String,
@@ -115,22 +106,13 @@ const orderSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-const Order =
-  mongoose.models.Order ||
-  mongoose.model('Order', orderSchema);
+const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
 
 ////////////////////////////////////////////////////
-/// 📍 CHECK DELIVERY ZONE
+/// 📍 CHECK ZONE
 ////////////////////////////////////////////////////
 app.post('/check-zone', asyncHandler(async (req, res) => {
   const { lat, lng } = req.body;
-
-  if (!lat || !lng) {
-    return res.status(400).json({
-      success: false,
-      message: "lat & lng required",
-    });
-  }
 
   const distance = getDistanceKm(lat, lng, STORE_LAT, STORE_LNG);
 
@@ -142,89 +124,88 @@ app.post('/check-zone', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 🔍 LOCATION SEARCH (FIXED)
+/// 🔍 LOCATION SEARCH
 ////////////////////////////////////////////////////
 app.get('/place-search', asyncHandler(async (req, res) => {
   const { query, lat, lon } = req.query;
 
-  console.log("🔍 Query:", query, "Lat:", lat, "Lon:", lon);
+  if (!query) return res.json([]);
 
-  if (!query || query.trim() === "") {
-    return res.json([]);
-  }
+  const url = `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(query)}&limit=10&apiKey=${process.env.GEOAPIFY_KEY}`;
 
-  if (!process.env.GEOAPIFY_KEY) {
-    return res.status(500).json({
-      error: "Missing GEOAPIFY_KEY"
-    });
-  }
+  const response = await axios.get(url);
 
-  const userLat = lat || STORE_LAT;
-  const userLon = lon || STORE_LNG;
+  const results = response.data.features.map((f) => ({
+    name: f.properties.name || "Unknown",
+    address: f.properties.formatted,
+    lat: f.properties.lat,
+    lon: f.properties.lon,
+  }));
 
-  const url = `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(query)}&bias=proximity:${userLon},${userLat}&limit=10&apiKey=${process.env.GEOAPIFY_KEY}`;
-
-  try {
-    const response = await axios.get(url, { timeout: 5000 });
-
-    const results = (response.data.features || []).map((f) => ({
-      name: f.properties.name || "Unknown",
-      address: f.properties.formatted || "",
-      lat: f.properties.lat,
-      lon: f.properties.lon,
-    }));
-
-    console.log("✅ Results:", results.length);
-
-    res.json(results);
-
-  } catch (err) {
-    console.error("❌ Geoapify Error:", err.response?.data || err.message);
-
-    res.status(500).json({
-      error: "Geoapify failed",
-      details: err.message,
-    });
-  }
+  res.json(results);
 }));
 
 ////////////////////////////////////////////////////
-/// 🔍 PRODUCT SEARCH
+/// 🔥 PRODUCTS FILTER API (IMPORTANT)
+////////////////////////////////////////////////////
+app.get('/products', asyncHandler(async (req, res) => {
+  const { category, maxPrice, search } = req.query;
+
+  let query = {};
+
+  if (category) {
+    query.category = new RegExp(category, 'i');
+  }
+
+  if (maxPrice) {
+    query.price = { $lte: Number(maxPrice) };
+  }
+
+  if (search) {
+    query.$or = [
+      { name: { $regex: search, $options: 'i' } },
+      { category: { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  const products = await Product.find(query).limit(100);
+
+  res.json({ success: true, data: products });
+}));
+
+////////////////////////////////////////////////////
+/// 🔥 PRODUCT DETAIL
+////////////////////////////////////////////////////
+app.get('/products/:id', asyncHandler(async (req, res) => {
+  const product = await Product.findById(req.params.id);
+
+  if (!product) {
+    return res.status(404).json({ success: false });
+  }
+
+  res.json({ success: true, data: product });
+}));
+
+////////////////////////////////////////////////////
+/// 🔍 SEARCH (ADVANCED)
 ////////////////////////////////////////////////////
 app.get('/search', asyncHandler(async (req, res) => {
   const query = req.query.q;
 
   if (!query) return res.json({ success: true, data: [] });
 
-  let products = await Product.find(
-    { $text: { $search: query } },
-    { score: { $meta: "textScore" } }
-  )
-    .sort({ score: { $meta: "textScore" } })
-    .limit(20);
-
-  if (!products.length) {
-    products = await Product.find({
-      $or: [
-        { name: { $regex: query, $options: 'i' } },
-        { category: { $regex: query, $options: 'i' } }
-      ]
-    }).limit(20);
-  }
+  const products = await Product.find({
+    $or: [
+      { name: { $regex: query, $options: 'i' } },
+      { category: { $regex: query, $options: 'i' } }
+    ]
+  }).limit(20);
 
   res.json({ success: true, data: products });
 }));
 
 ////////////////////////////////////////////////////
-/// PRODUCTS
-////////////////////////////////////////////////////
-app.get('/products', asyncHandler(async (req, res) => {
-  const products = await Product.find().limit(100);
-  res.json({ success: true, data: products });
-}));
-
-////////////////////////////////////////////////////
-/// ORDER
+/// 🛒 ORDER
 ////////////////////////////////////////////////////
 app.post('/order', asyncHandler(async (req, res) => {
   const { type, items, total, riderNearby } = req.body;
@@ -243,7 +224,7 @@ app.post('/order', asyncHandler(async (req, res) => {
 /// KEEP ALIVE
 ////////////////////////////////////////////////////
 setInterval(() => {
-  https.get(process.env.BASE_URL || "https://rolling-bnd6.onrender.com", () => {});
+  https.get(process.env.BASE_URL, () => {});
 }, 14 * 60 * 1000);
 
 ////////////////////////////////////////////////////
@@ -252,5 +233,5 @@ setInterval(() => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Running on ${PORT}`);
 });
