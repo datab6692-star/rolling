@@ -83,30 +83,48 @@ const getDistanceKm = (lat1, lon1, lat2, lon2) => {
 /// MODELS
 ////////////////////////////////////////////////////
 const productSchema = new mongoose.Schema({
-  name: { type: String, index: true },
-  price: { type: Number, required: true },
+  name: String,
+  price: Number,
   oldPrice: Number,
   image: String,
   category: String,
 }, { timestamps: true });
 
-productSchema.index({ name: "text", category: "text" });
+const Product = mongoose.model('Product', productSchema);
 
-const Product = mongoose.models.Product || mongoose.model('Product', productSchema);
-
+////////////////////////////////////////////////////
+/// 🔥 UPDATED ORDER MODEL (PAYMENT READY)
+////////////////////////////////////////////////////
 const orderSchema = new mongoose.Schema({
-  type: String,
+  userId: String,
   items: Array,
-  total: Number,
-  deliveryFee: Number,
-  status: {
-    type: String,
-    enum: ['pending', 'accepted', 'picked', 'delivered'],
-    default: 'pending'
-  }
-}, { timestamps: true });
+  totalAmount: Number,
+  address: String,
 
-const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
+  paymentMethod: {
+    type: String,
+    enum: ['COD', 'UPI'],
+  },
+
+  paymentStatus: {
+    type: String,
+    enum: ['COD', 'PENDING', 'PAID', 'FAILED'],
+    default: 'PENDING',
+  },
+
+  orderStatus: {
+    type: String,
+    enum: ['PLACED', 'PREPARING', 'OUT_FOR_DELIVERY', 'DELIVERED'],
+    default: 'PLACED',
+  },
+
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  }
+});
+
+const Order = mongoose.model('Order', orderSchema);
 
 ////////////////////////////////////////////////////
 /// 📍 CHECK ZONE
@@ -124,10 +142,10 @@ app.post('/check-zone', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// 🔍 LOCATION SEARCH
+/// 🔍 LOCATION SEARCH (FIXED URL 🔥)
 ////////////////////////////////////////////////////
 app.get('/place-search', asyncHandler(async (req, res) => {
-  const { query, lat, lon } = req.query;
+  const { query } = req.query;
 
   if (!query) return res.json([]);
 
@@ -146,20 +164,15 @@ app.get('/place-search', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 PRODUCTS FILTER API (IMPORTANT)
+/// 🔥 PRODUCTS FILTER API
 ////////////////////////////////////////////////////
 app.get('/products', asyncHandler(async (req, res) => {
   const { category, maxPrice, search } = req.query;
 
   let query = {};
 
-  if (category) {
-    query.category = new RegExp(category, 'i');
-  }
-
-  if (maxPrice) {
-    query.price = { $lte: Number(maxPrice) };
-  }
+  if (category) query.category = new RegExp(category, 'i');
+  if (maxPrice) query.price = { $lte: Number(maxPrice) };
 
   if (search) {
     query.$or = [
@@ -174,50 +187,92 @@ app.get('/products', asyncHandler(async (req, res) => {
 }));
 
 ////////////////////////////////////////////////////
-/// 🔥 PRODUCT DETAIL
-////////////////////////////////////////////////////
-app.get('/products/:id', asyncHandler(async (req, res) => {
-  const product = await Product.findById(req.params.id);
-
-  if (!product) {
-    return res.status(404).json({ success: false });
-  }
-
-  res.json({ success: true, data: product });
-}));
-
-////////////////////////////////////////////////////
-/// 🔍 SEARCH (ADVANCED)
+/// 🔍 SEARCH
 ////////////////////////////////////////////////////
 app.get('/search', asyncHandler(async (req, res) => {
-  const query = req.query.q;
+  const q = req.query.q;
 
-  if (!query) return res.json({ success: true, data: [] });
+  if (!q) return res.json({ success: true, data: [] });
 
   const products = await Product.find({
     $or: [
-      { name: { $regex: query, $options: 'i' } },
-      { category: { $regex: query, $options: 'i' } }
+      { name: { $regex: q, $options: 'i' } },
+      { category: { $regex: q, $options: 'i' } }
     ]
-  }).limit(20);
+  });
 
   res.json({ success: true, data: products });
 }));
 
 ////////////////////////////////////////////////////
-/// 🛒 ORDER
+/// 🛒 PLACE ORDER (UPDATED 🔥)
 ////////////////////////////////////////////////////
 app.post('/order', asyncHandler(async (req, res) => {
-  const { type, items, total, riderNearby } = req.body;
+  const {
+    userId,
+    items,
+    totalAmount,
+    address,
+    paymentMethod
+  } = req.body;
 
   const order = await Order.create({
-    type,
+    userId,
     items,
-    total,
-    deliveryFee: riderNearby ? 0 : 5,
+    totalAmount,
+    address,
+    paymentMethod,
+    paymentStatus: paymentMethod === "COD" ? "COD" : "PENDING"
   });
 
-  res.json({ success: true, order });
+  res.json({
+    success: true,
+    orderId: order._id,
+  });
+}));
+
+////////////////////////////////////////////////////
+/// 🔥 VERIFY PAYMENT
+////////////////////////////////////////////////////
+app.post('/verify-payment', asyncHandler(async (req, res) => {
+  const { orderId, status } = req.body;
+
+  const order = await Order.findById(orderId);
+  if (!order) return res.json({ success: false });
+
+  order.paymentStatus = status;
+  await order.save();
+
+  console.log("✅ Payment updated:", orderId, status);
+
+  res.json({ success: true });
+}));
+
+////////////////////////////////////////////////////
+/// 🤖 TELEGRAM ALERT
+////////////////////////////////////////////////////
+app.post('/telegram-alert', asyncHandler(async (req, res) => {
+  const { orderId } = req.body;
+
+  const order = await Order.findById(orderId);
+  if (!order) return res.json({ success: false });
+
+  const message = `
+🚨 Payment not verified
+
+Order: ${order._id}
+Amount: ₹${order.totalAmount}
+`;
+
+  await axios.post(
+    `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      chat_id: process.env.TELEGRAM_CHAT_ID,
+      text: message,
+    }
+  );
+
+  res.json({ success: true });
 }));
 
 ////////////////////////////////////////////////////
