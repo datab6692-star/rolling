@@ -21,7 +21,7 @@ mongoose.connect(process.env.MONGO_URL)
   });
 
 ////////////////////////////////////////////////////
-/// DISTANCE
+/// DISTANCE FUNCTION
 ////////////////////////////////////////////////////
 const getDistanceKm = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
@@ -65,7 +65,7 @@ const Order = mongoose.model('Order', new mongoose.Schema({
 }));
 
 ////////////////////////////////////////////////////
-/// BOT
+/// TELEGRAM BOT
 ////////////////////////////////////////////////////
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
   polling: true
@@ -87,7 +87,7 @@ const safeSend = async (chatId, text, options = {}) => {
 };
 
 ////////////////////////////////////////////////////
-/// START
+/// START COMMAND
 ////////////////////////////////////////////////////
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
@@ -109,16 +109,14 @@ bot.onText(/\/start/, (msg) => {
 });
 
 ////////////////////////////////////////////////////
-/// MESSAGE
+/// MESSAGE HANDLER
 ////////////////////////////////////////////////////
 bot.on("message", async (msg) => {
   try {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    ////////////////////////////////////////////////////
-    /// LOGIN
-    ////////////////////////////////////////////////////
+    // LOGIN
     if (sessions[chatId]?.step === "login") {
       const rider = await Rider.findOne({ riderId: text });
 
@@ -137,9 +135,7 @@ bot.on("message", async (msg) => {
       });
     }
 
-    ////////////////////////////////////////////////////
-    /// RIDER CONTROL
-    ////////////////////////////////////////////////////
+    // RIDER CONTROL
     const rider = await Rider.findOne({ chatId });
 
     if (rider) {
@@ -162,9 +158,7 @@ bot.on("message", async (msg) => {
       }
     }
 
-    ////////////////////////////////////////////////////
-    /// ADMIN
-    ////////////////////////////////////////////////////
+    // ADMIN
     if (!isAdmin(chatId)) return;
 
     if (text === "📦 Orders") {
@@ -195,7 +189,7 @@ ${r.isOnline ? "🟢 Online" : "🔴 Offline"}`);
 });
 
 ////////////////////////////////////////////////////
-/// LOCATION
+/// LOCATION UPDATE
 ////////////////////////////////////////////////////
 bot.on("location", async (msg) => {
   const rider = await Rider.findOne({ chatId: msg.chat.id });
@@ -211,13 +205,46 @@ bot.on("location", async (msg) => {
 });
 
 ////////////////////////////////////////////////////
+/// 📍 CHECK ZONE API
+////////////////////////////////////////////////////
+app.post('/check-zone', (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+
+    const centerLat = 17.4258;
+    const centerLng = 78.6492;
+
+    const distance = getDistanceKm(lat, lng, centerLat, centerLng);
+
+    const SERVICE_RADIUS_KM = 5;
+
+    const inZone = distance <= SERVICE_RADIUS_KM;
+
+    res.json({
+      success: true,
+      inZone,
+      distance: Number(distance.toFixed(2)),
+      eta: inZone ? "10-15 mins" : "--",
+      message: inZone
+        ? "Delivery available 🚀"
+        : "Coming soon to your area",
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      inZone: false,
+      message: "Server error",
+    });
+  }
+});
+
+////////////////////////////////////////////////////
 /// ORDER API
 ////////////////////////////////////////////////////
 app.post('/order', async (req, res) => {
   try {
     const { userId, items, totalAmount, address, phone, lat, lng } = req.body;
-
-    console.log("📦 New Order:", totalAmount);
 
     const order = await Order.create({
       userId,
@@ -271,12 +298,47 @@ app.post('/order', async (req, res) => {
 });
 
 ////////////////////////////////////////////////////
+/// CALLBACK HANDLER
+////////////////////////////////////////////////////
+bot.on("callback_query", async (query) => {
+  const data = query.data;
+  const chatId = query.message.chat.id;
+
+  if (data.startsWith("accept")) {
+    const orderId = data.split("_")[1];
+    const order = await Order.findById(orderId);
+
+    if (order.riderId) {
+      return safeSend(chatId, "⚠️ Already assigned");
+    }
+
+    const rider = await Rider.findOne({ chatId });
+
+    order.riderId = rider.riderId;
+    order.orderStatus = "ACCEPTED";
+    await order.save();
+
+    return safeSend(chatId, "✅ Accepted");
+  }
+});
+
+////////////////////////////////////////////////////
+/// ROOT
+////////////////////////////////////////////////////
 app.get('/', (_, res) => res.send("🚀 Backend LIVE"));
 
+////////////////////////////////////////////////////
+/// KEEP ALIVE
+////////////////////////////////////////////////////
 setInterval(() => {
   https.get(process.env.BASE_URL, () => {});
 }, 14 * 60 * 1000);
 
-app.listen(process.env.PORT || 3000, () =>
-  console.log("🚀 Server Running")
-);
+////////////////////////////////////////////////////
+/// SERVER
+////////////////////////////////////////////////////
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on ${PORT}`);
+});
