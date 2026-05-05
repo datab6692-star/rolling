@@ -67,10 +67,24 @@ const Order = mongoose.model('Order', new mongoose.Schema({
 ////////////////////////////////////////////////////
 /// BOT
 ////////////////////////////////////////////////////
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
+  polling: true
+});
 
 const sessions = {};
-const isAdmin = (chatId) => chatId.toString() === process.env.ADMIN_CHAT_ID;
+const isAdmin = (chatId) =>
+  chatId.toString() === process.env.ADMIN_CHAT_ID;
+
+////////////////////////////////////////////////////
+/// SAFE SEND
+////////////////////////////////////////////////////
+const safeSend = async (chatId, text, options = {}) => {
+  try {
+    await bot.sendMessage(chatId, text, options);
+  } catch (e) {
+    console.log("❌ Telegram Error:", e.message);
+  }
+};
 
 ////////////////////////////////////////////////////
 /// START
@@ -79,7 +93,7 @@ bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
 
   if (isAdmin(chatId)) {
-    return bot.sendMessage(chatId, "👑 Admin Panel", {
+    return safeSend(chatId, "👑 Admin Panel", {
       reply_markup: {
         keyboard: [
           ["📦 Orders", "👨 Riders"],
@@ -91,112 +105,92 @@ bot.onText(/\/start/, (msg) => {
   }
 
   sessions[chatId] = { step: "login" };
-  bot.sendMessage(chatId, "Enter Rider ID:");
+  safeSend(chatId, "Enter Rider ID:");
 });
 
 ////////////////////////////////////////////////////
 /// MESSAGE
 ////////////////////////////////////////////////////
 bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
+  try {
+    const chatId = msg.chat.id;
+    const text = msg.text;
 
-  // LOGIN
-  if (sessions[chatId]?.step === "login") {
-    const rider = await Rider.findOne({ riderId: text });
+    ////////////////////////////////////////////////////
+    /// LOGIN
+    ////////////////////////////////////////////////////
+    if (sessions[chatId]?.step === "login") {
+      const rider = await Rider.findOne({ riderId: text });
 
-    if (!rider) return bot.sendMessage(chatId, "❌ Invalid ID");
+      if (!rider) return safeSend(chatId, "❌ Invalid ID");
 
-    rider.chatId = chatId;
-    await rider.save();
-
-    sessions[chatId] = null;
-
-    return bot.sendMessage(chatId, "✅ Logged in", {
-      reply_markup: {
-        keyboard: [["🟢 Online", "🔴 Offline"]],
-        resize_keyboard: true
-      }
-    });
-  }
-
-  // RIDER CONTROLS
-  const rider = await Rider.findOne({ chatId });
-
-  if (rider) {
-    if (text === "🟢 Online") {
-      rider.isOnline = true;
+      rider.chatId = chatId;
       await rider.save();
 
-      return bot.sendMessage(chatId, "📍 Send location", {
+      sessions[chatId] = null;
+
+      return safeSend(chatId, "✅ Logged in", {
         reply_markup: {
-          keyboard: [[{ text: "Send Location", request_location: true }]],
+          keyboard: [["🟢 Online", "🔴 Offline"]],
           resize_keyboard: true
         }
       });
     }
 
-    if (text === "🔴 Offline") {
-      rider.isOnline = false;
-      await rider.save();
-      return bot.sendMessage(chatId, "🔴 Offline");
+    ////////////////////////////////////////////////////
+    /// RIDER CONTROL
+    ////////////////////////////////////////////////////
+    const rider = await Rider.findOne({ chatId });
+
+    if (rider) {
+      if (text === "🟢 Online") {
+        rider.isOnline = true;
+        await rider.save();
+
+        return safeSend(chatId, "📍 Send location", {
+          reply_markup: {
+            keyboard: [[{ text: "Send Location", request_location: true }]],
+            resize_keyboard: true
+          }
+        });
+      }
+
+      if (text === "🔴 Offline") {
+        rider.isOnline = false;
+        await rider.save();
+        return safeSend(chatId, "🔴 Offline");
+      }
     }
-  }
 
-  // ADMIN
-  if (!isAdmin(chatId)) return;
+    ////////////////////////////////////////////////////
+    /// ADMIN
+    ////////////////////////////////////////////////////
+    if (!isAdmin(chatId)) return;
 
-  if (text === "📦 Orders") {
-    const orders = await Order.find().sort({ createdAt: -1 }).limit(10);
+    if (text === "📦 Orders") {
+      const orders = await Order.find().sort({ createdAt: -1 }).limit(10);
 
-    for (const o of orders) {
-      bot.sendMessage(chatId,
+      for (const o of orders) {
+        safeSend(chatId,
 `🛒 ${o._id}
 ₹${o.totalAmount}
 ${o.address}
 Status: ${o.orderStatus}`);
+      }
     }
-  }
 
-  if (text === "⏳ Pending") {
-    const orders = await Order.find({ orderStatus: "PLACED" });
+    if (text === "👨 Riders") {
+      const riders = await Rider.find();
 
-    for (const o of orders) {
-      bot.sendMessage(chatId,
-`⏳ ${o._id}
-₹${o.totalAmount}
-${o.address}`,
-{
-  reply_markup: {
-    inline_keyboard: [
-      [{ text: "Assign Rider", callback_data: `assign_${o._id}` }]
-    ]
-  }
-});
-    }
-  }
-
-  if (text === "👨 Riders") {
-    const riders = await Rider.find();
-
-    for (const r of riders) {
-      bot.sendMessage(chatId,
+      for (const r of riders) {
+        safeSend(chatId,
 `👤 ${r.name || r.riderId}
 ${r.isOnline ? "🟢 Online" : "🔴 Offline"}`);
+      }
     }
-  }
 
-  if (text === "🚚 Active") {
-    const orders = await Order.find({
-      orderStatus: { $in: ["ACCEPTED", "PICKED"] }
-    });
-
-    for (const o of orders) {
-      bot.sendMessage(chatId,
-`🚚 ${o._id}
-₹${o.totalAmount}
-Status: ${o.orderStatus}`);
-    }
+  } catch (e) {
+    console.log("❌ Bot Error:", e.message);
   }
 });
 
@@ -213,7 +207,7 @@ bot.on("location", async (msg) => {
   };
 
   await rider.save();
-  bot.sendMessage(msg.chat.id, "✅ Location updated");
+  safeSend(msg.chat.id, "✅ Location updated");
 });
 
 ////////////////////////////////////////////////////
@@ -222,6 +216,8 @@ bot.on("location", async (msg) => {
 app.post('/order', async (req, res) => {
   try {
     const { userId, items, totalAmount, address, phone, lat, lng } = req.body;
+
+    console.log("📦 New Order:", totalAmount);
 
     const order = await Order.create({
       userId,
@@ -232,7 +228,7 @@ app.post('/order', async (req, res) => {
       location: { lat, lng }
     });
 
-    const riders = await Rider.find({ isOnline: true });
+    const riders = await Rider.find({ isOnline: true }).limit(10);
 
     let nearest = null;
     let minDistance = Infinity;
@@ -248,62 +244,29 @@ app.post('/order', async (req, res) => {
       }
     }
 
-    if (nearest && nearest.chatId) {
-      await bot.sendMessage(
+    if (nearest?.chatId) {
+      safeSend(
         nearest.chatId,
 `🛒 New Order
 ₹${totalAmount}
 📞 ${phone}
 📍 ${address}`,
-{
-  reply_markup: {
-    inline_keyboard: [
-      [{ text: "✅ Accept", callback_data: `accept_${order._id}` }],
-      [{ text: "❌ Reject", callback_data: `reject_${order._id}` }]
-    ]
-  }
-});
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "✅ Accept", callback_data: `accept_${order._id}` }],
+              [{ text: "❌ Reject", callback_data: `reject_${order._id}` }]
+            ]
+          }
+        }
+      );
     }
 
     res.json({ success: true, orderId: order._id });
 
   } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-////////////////////////////////////////////////////
-/// CALLBACK
-////////////////////////////////////////////////////
-bot.on("callback_query", async (query) => {
-  const data = query.data;
-  const chatId = query.message.chat.id;
-
-  if (data.startsWith("accept")) {
-    const orderId = data.split("_")[1];
-    const order = await Order.findById(orderId);
-
-    if (order.riderId) return bot.sendMessage(chatId, "⚠️ Already assigned");
-
-    const rider = await Rider.findOne({ chatId });
-
-    order.riderId = rider.riderId;
-    order.orderStatus = "ACCEPTED";
-    await order.save();
-
-    return bot.sendMessage(chatId, "✅ Accepted");
-  }
-
-  if (data.startsWith("picked")) {
-    const id = data.split("_")[1];
-    await Order.findByIdAndUpdate(id, { orderStatus: "PICKED" });
-    return bot.sendMessage(chatId, "📦 Picked");
-  }
-
-  if (data.startsWith("delivered")) {
-    const id = data.split("_")[1];
-    await Order.findByIdAndUpdate(id, { orderStatus: "DELIVERED" });
-    return bot.sendMessage(chatId, "🎉 Delivered");
+    console.error("❌ Order Error:", e.message);
+    res.status(500).json({ success: false });
   }
 });
 
