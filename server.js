@@ -65,13 +65,21 @@ const Order = mongoose.model('Order', new mongoose.Schema({
 }));
 
 ////////////////////////////////////////////////////
-/// TELEGRAM BOT
+/// TELEGRAM BOT (ONLY RUN IN PRODUCTION)
 ////////////////////////////////////////////////////
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
-  polling: true
-});
+let bot;
+
+if (process.env.NODE_ENV === "production") {
+  bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
+    polling: true
+  });
+  console.log("🤖 Bot started (production)");
+} else {
+  console.log("⚠️ Bot disabled (local)");
+}
 
 const sessions = {};
+
 const isAdmin = (chatId) =>
   chatId.toString() === process.env.ADMIN_CHAT_ID;
 
@@ -80,43 +88,39 @@ const isAdmin = (chatId) =>
 ////////////////////////////////////////////////////
 const safeSend = async (chatId, text, options = {}) => {
   try {
-    await bot.sendMessage(chatId, text, options);
+    if (bot) await bot.sendMessage(chatId, text, options);
   } catch (e) {
     console.log("❌ Telegram Error:", e.message);
   }
 };
 
 ////////////////////////////////////////////////////
-/// START COMMAND
+/// BOT HANDLERS
 ////////////////////////////////////////////////////
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
+if (bot) {
 
-  if (isAdmin(chatId)) {
-    return safeSend(chatId, "👑 Admin Panel", {
-      reply_markup: {
-        keyboard: [
-          ["📦 Orders", "👨 Riders"],
-          ["⏳ Pending", "🚚 Active"]
-        ],
-        resize_keyboard: true
-      }
-    });
-  }
+  bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id;
 
-  sessions[chatId] = { step: "login" };
-  safeSend(chatId, "Enter Rider ID:");
-});
+    if (isAdmin(chatId)) {
+      return safeSend(chatId, "👑 Admin Panel", {
+        reply_markup: {
+          keyboard: [
+            ["📦 Orders", "👨 Riders"]
+          ],
+          resize_keyboard: true
+        }
+      });
+    }
 
-////////////////////////////////////////////////////
-/// MESSAGE HANDLER
-////////////////////////////////////////////////////
-bot.on("message", async (msg) => {
-  try {
+    sessions[chatId] = { step: "login" };
+    safeSend(chatId, "Enter Rider ID:");
+  });
+
+  bot.on("message", async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    // LOGIN
     if (sessions[chatId]?.step === "login") {
       const rider = await Rider.findOne({ riderId: text });
 
@@ -135,7 +139,6 @@ bot.on("message", async (msg) => {
       });
     }
 
-    // RIDER CONTROL
     const rider = await Rider.findOne({ chatId });
 
     if (rider) {
@@ -157,55 +160,46 @@ bot.on("message", async (msg) => {
         return safeSend(chatId, "🔴 Offline");
       }
     }
+  });
 
-    // ADMIN
-    if (!isAdmin(chatId)) return;
+  bot.on("location", async (msg) => {
+    const rider = await Rider.findOne({ chatId: msg.chat.id });
+    if (!rider) return;
 
-    if (text === "📦 Orders") {
-      const orders = await Order.find().sort({ createdAt: -1 }).limit(10);
+    rider.location = {
+      lat: msg.location.latitude,
+      lng: msg.location.longitude
+    };
 
-      for (const o of orders) {
-        safeSend(chatId,
-`🛒 ${o._id}
-₹${o.totalAmount}
-${o.address}
-Status: ${o.orderStatus}`);
+    await rider.save();
+    safeSend(msg.chat.id, "✅ Location updated");
+  });
+
+  bot.on("callback_query", async (query) => {
+    const data = query.data;
+    const chatId = query.message.chat.id;
+
+    if (data.startsWith("accept")) {
+      const orderId = data.split("_")[1];
+      const order = await Order.findById(orderId);
+
+      if (order.riderId) {
+        return safeSend(chatId, "⚠️ Already assigned");
       }
+
+      const rider = await Rider.findOne({ chatId });
+
+      order.riderId = rider.riderId;
+      order.orderStatus = "ACCEPTED";
+      await order.save();
+
+      return safeSend(chatId, "✅ Accepted");
     }
-
-    if (text === "👨 Riders") {
-      const riders = await Rider.find();
-
-      for (const r of riders) {
-        safeSend(chatId,
-`👤 ${r.name || r.riderId}
-${r.isOnline ? "🟢 Online" : "🔴 Offline"}`);
-      }
-    }
-
-  } catch (e) {
-    console.log("❌ Bot Error:", e.message);
-  }
-});
+  });
+}
 
 ////////////////////////////////////////////////////
-/// LOCATION UPDATE
-////////////////////////////////////////////////////
-bot.on("location", async (msg) => {
-  const rider = await Rider.findOne({ chatId: msg.chat.id });
-  if (!rider) return;
-
-  rider.location = {
-    lat: msg.location.latitude,
-    lng: msg.location.longitude
-  };
-
-  await rider.save();
-  safeSend(msg.chat.id, "✅ Location updated");
-});
-
-////////////////////////////////////////////////////
-/// 📍 CHECK ZONE API
+/// 📍 CHECK ZONE (2KM)
 ////////////////////////////////////////////////////
 app.post('/check-zone', (req, res) => {
   try {
@@ -216,7 +210,7 @@ app.post('/check-zone', (req, res) => {
 
     const distance = getDistanceKm(lat, lng, centerLat, centerLng);
 
-    const SERVICE_RADIUS_KM = 5;
+    const SERVICE_RADIUS_KM = 2; // 🔥 FINAL
 
     const inZone = distance <= SERVICE_RADIUS_KM;
 
@@ -224,10 +218,10 @@ app.post('/check-zone', (req, res) => {
       success: true,
       inZone,
       distance: Number(distance.toFixed(2)),
-      eta: inZone ? "10-15 mins" : "--",
+      eta: inZone ? "10 mins" : "--",
       message: inZone
-        ? "Delivery available 🚀"
-        : "Coming soon to your area",
+        ? "Delivery in 10 mins 🚀"
+        : "Only within 2 KM 😔",
     });
 
   } catch (err) {
@@ -281,8 +275,7 @@ app.post('/order', async (req, res) => {
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: "✅ Accept", callback_data: `accept_${order._id}` }],
-              [{ text: "❌ Reject", callback_data: `reject_${order._id}` }]
+              [{ text: "✅ Accept", callback_data: `accept_${order._id}` }]
             ]
           }
         }
@@ -294,31 +287,6 @@ app.post('/order', async (req, res) => {
   } catch (e) {
     console.error("❌ Order Error:", e.message);
     res.status(500).json({ success: false });
-  }
-});
-
-////////////////////////////////////////////////////
-/// CALLBACK HANDLER
-////////////////////////////////////////////////////
-bot.on("callback_query", async (query) => {
-  const data = query.data;
-  const chatId = query.message.chat.id;
-
-  if (data.startsWith("accept")) {
-    const orderId = data.split("_")[1];
-    const order = await Order.findById(orderId);
-
-    if (order.riderId) {
-      return safeSend(chatId, "⚠️ Already assigned");
-    }
-
-    const rider = await Rider.findOne({ chatId });
-
-    order.riderId = rider.riderId;
-    order.orderStatus = "ACCEPTED";
-    await order.save();
-
-    return safeSend(chatId, "✅ Accepted");
   }
 });
 
