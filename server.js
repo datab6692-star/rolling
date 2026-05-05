@@ -7,25 +7,21 @@ const https = require('https');
 const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
-
-////////////////////////////////////////////////////
-/// MIDDLEWARE
-////////////////////////////////////////////////////
 app.use(cors());
 app.use(express.json());
 
 ////////////////////////////////////////////////////
-/// MONGODB
+/// DB CONNECT
 ////////////////////////////////////////////////////
 mongoose.connect(process.env.MONGO_URL)
   .then(() => console.log("✅ MongoDB Connected"))
-  .catch((err) => {
+  .catch(err => {
     console.error("❌ DB Error:", err.message);
     process.exit(1);
   });
 
 ////////////////////////////////////////////////////
-/// 📐 DISTANCE
+/// DISTANCE
 ////////////////////////////////////////////////////
 const getDistanceKm = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
@@ -44,29 +40,21 @@ const getDistanceKm = (lat1, lon1, lat2, lon2) => {
 ////////////////////////////////////////////////////
 /// MODELS
 ////////////////////////////////////////////////////
-const riderSchema = new mongoose.Schema({
+const Rider = mongoose.model('Rider', new mongoose.Schema({
   riderId: String,
   name: String,
   chatId: String,
   isOnline: { type: Boolean, default: false },
-  location: {
-    lat: Number,
-    lng: Number
-  }
-});
-riderSchema.index({ isOnline: 1 });
-const Rider = mongoose.model('Rider', riderSchema);
+  location: { lat: Number, lng: Number }
+}));
 
-const orderSchema = new mongoose.Schema({
+const Order = mongoose.model('Order', new mongoose.Schema({
   userId: String,
   items: Array,
   totalAmount: Number,
   address: String,
   phone: String,
-  location: {
-    lat: Number,
-    lng: Number
-  },
+  location: { lat: Number, lng: Number },
   riderId: String,
   orderStatus: {
     type: String,
@@ -74,27 +62,18 @@ const orderSchema = new mongoose.Schema({
     default: 'PLACED'
   },
   createdAt: { type: Date, default: Date.now }
-});
-orderSchema.index({ orderStatus: 1 });
-const Order = mongoose.model('Order', orderSchema);
+}));
 
 ////////////////////////////////////////////////////
-/// 🤖 TELEGRAM BOT
+/// BOT
 ////////////////////////////////////////////////////
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
-  polling: true
-});
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 const sessions = {};
+const isAdmin = (chatId) => chatId.toString() === process.env.ADMIN_CHAT_ID;
 
 ////////////////////////////////////////////////////
-/// 👑 ADMIN CHECK
-////////////////////////////////////////////////////
-const isAdmin = (chatId) =>
-  chatId.toString() === process.env.ADMIN_CHAT_ID;
-
-////////////////////////////////////////////////////
-/// 🚀 START COMMAND
+/// START
 ////////////////////////////////////////////////////
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
@@ -116,15 +95,13 @@ bot.onText(/\/start/, (msg) => {
 });
 
 ////////////////////////////////////////////////////
-/// 📩 MAIN MESSAGE HANDLER
+/// MESSAGE
 ////////////////////////////////////////////////////
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  ////////////////////////////////////////////////////
-  /// RIDER LOGIN
-  ////////////////////////////////////////////////////
+  // LOGIN
   if (sessions[chatId]?.step === "login") {
     const rider = await Rider.findOne({ riderId: text });
 
@@ -143,9 +120,7 @@ bot.on("message", async (msg) => {
     });
   }
 
-  ////////////////////////////////////////////////////
-  /// RIDER CONTROLS
-  ////////////////////////////////////////////////////
+  // RIDER CONTROLS
   const rider = await Rider.findOne({ chatId });
 
   if (rider) {
@@ -168,20 +143,18 @@ bot.on("message", async (msg) => {
     }
   }
 
-  ////////////////////////////////////////////////////
-  /// ADMIN CONTROLS
-  ////////////////////////////////////////////////////
+  // ADMIN
   if (!isAdmin(chatId)) return;
 
   if (text === "📦 Orders") {
     const orders = await Order.find().sort({ createdAt: -1 }).limit(10);
+
     for (const o of orders) {
       bot.sendMessage(chatId,
-        `🛒 ${o._id}
+`🛒 ${o._id}
 ₹${o.totalAmount}
 ${o.address}
-Status: ${o.orderStatus}`
-      );
+Status: ${o.orderStatus}`);
     }
   }
 
@@ -190,27 +163,26 @@ Status: ${o.orderStatus}`
 
     for (const o of orders) {
       bot.sendMessage(chatId,
-        `⏳ ${o._id}
+`⏳ ${o._id}
 ₹${o.totalAmount}
 ${o.address}`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "Assign Rider", callback_data: `assign_${o._id}` }]
-            ]
-          }
-        }
-      );
+{
+  reply_markup: {
+    inline_keyboard: [
+      [{ text: "Assign Rider", callback_data: `assign_${o._id}` }]
+    ]
+  }
+});
     }
   }
 
   if (text === "👨 Riders") {
     const riders = await Rider.find();
+
     for (const r of riders) {
       bot.sendMessage(chatId,
-        `👤 ${r.name || r.riderId}
-${r.isOnline ? "🟢 Online" : "🔴 Offline"}`
-      );
+`👤 ${r.name || r.riderId}
+${r.isOnline ? "🟢 Online" : "🔴 Offline"}`);
     }
   }
 
@@ -221,16 +193,15 @@ ${r.isOnline ? "🟢 Online" : "🔴 Offline"}`
 
     for (const o of orders) {
       bot.sendMessage(chatId,
-        `🚚 ${o._id}
+`🚚 ${o._id}
 ₹${o.totalAmount}
-Status: ${o.orderStatus}`
-      );
+Status: ${o.orderStatus}`);
     }
   }
 });
 
 ////////////////////////////////////////////////////
-/// 📍 SAVE LOCATION
+/// LOCATION
 ////////////////////////////////////////////////////
 bot.on("location", async (msg) => {
   const rider = await Rider.findOne({ chatId: msg.chat.id });
@@ -242,12 +213,11 @@ bot.on("location", async (msg) => {
   };
 
   await rider.save();
-
   bot.sendMessage(msg.chat.id, "✅ Location updated");
 });
 
 ////////////////////////////////////////////////////
-/// 📦 PLACE ORDER
+/// ORDER API
 ////////////////////////////////////////////////////
 app.post('/order', async (req, res) => {
   try {
@@ -262,10 +232,7 @@ app.post('/order', async (req, res) => {
       location: { lat, lng }
     });
 
-    ////////////////////////////////////////////////////
-    /// AUTO ASSIGN
-    ////////////////////////////////////////////////////
-    const riders = await Rider.find({ isOnline: true }).limit(20);
+    const riders = await Rider.find({ isOnline: true });
 
     let nearest = null;
     let minDistance = Infinity;
@@ -284,19 +251,18 @@ app.post('/order', async (req, res) => {
     if (nearest && nearest.chatId) {
       await bot.sendMessage(
         nearest.chatId,
-        `🛒 New Order
+`🛒 New Order
 ₹${totalAmount}
 📞 ${phone}
 📍 ${address}`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "✅ Accept", callback_data: `accept_${order._id}` }],
-              [{ text: "❌ Reject", callback_data: `reject_${order._id}` }]
-            ]
-          }
-        }
-      );
+{
+  reply_markup: {
+    inline_keyboard: [
+      [{ text: "✅ Accept", callback_data: `accept_${order._id}` }],
+      [{ text: "❌ Reject", callback_data: `reject_${order._id}` }]
+    ]
+  }
+});
     }
 
     res.json({ success: true, orderId: order._id });
@@ -307,22 +273,17 @@ app.post('/order', async (req, res) => {
 });
 
 ////////////////////////////////////////////////////
-/// CALLBACK HANDLER
+/// CALLBACK
 ////////////////////////////////////////////////////
 bot.on("callback_query", async (query) => {
   const data = query.data;
   const chatId = query.message.chat.id;
 
-  ////////////////////////////////////////////////////
-  /// ACCEPT
-  ////////////////////////////////////////////////////
   if (data.startsWith("accept")) {
     const orderId = data.split("_")[1];
     const order = await Order.findById(orderId);
 
-    if (order.riderId) {
-      return bot.sendMessage(chatId, "⚠️ Already assigned");
-    }
+    if (order.riderId) return bot.sendMessage(chatId, "⚠️ Already assigned");
 
     const rider = await Rider.findOne({ chatId });
 
@@ -330,82 +291,29 @@ bot.on("callback_query", async (query) => {
     order.orderStatus = "ACCEPTED";
     await order.save();
 
-    return bot.sendMessage(chatId, "✅ Accepted", {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📦 Picked", callback_data: `picked_${orderId}` }],
-          [{ text: "🚚 Delivered", callback_data: `delivered_${orderId}` }]
-        ]
-      }
-    });
+    return bot.sendMessage(chatId, "✅ Accepted");
   }
 
-  ////////////////////////////////////////////////////
-  /// PICKED / DELIVERED
-  ////////////////////////////////////////////////////
   if (data.startsWith("picked")) {
-    const orderId = data.split("_")[1];
-    await Order.findByIdAndUpdate(orderId, { orderStatus: "PICKED" });
+    const id = data.split("_")[1];
+    await Order.findByIdAndUpdate(id, { orderStatus: "PICKED" });
     return bot.sendMessage(chatId, "📦 Picked");
   }
 
   if (data.startsWith("delivered")) {
-    const orderId = data.split("_")[1];
-    await Order.findByIdAndUpdate(orderId, { orderStatus: "DELIVERED" });
+    const id = data.split("_")[1];
+    await Order.findByIdAndUpdate(id, { orderStatus: "DELIVERED" });
     return bot.sendMessage(chatId, "🎉 Delivered");
-  }
-
-  ////////////////////////////////////////////////////
-  /// ADMIN ASSIGN
-  ////////////////////////////////////////////////////
-  if (data.startsWith("assign_")) {
-    const orderId = data.split("_")[1];
-
-    const riders = await Rider.find({ isOnline: true });
-
-    const buttons = riders.map(r => ([
-      { text: r.name || r.riderId, callback_data: `assignRider_${orderId}_${r._id}` }
-    ]));
-
-    return bot.sendMessage(chatId, "Select Rider:", {
-      reply_markup: { inline_keyboard: buttons }
-    });
-  }
-
-  if (data.startsWith("assignRider")) {
-    const parts = data.split("_");
-    const orderId = parts[1];
-    const riderMongoId = parts[2];
-
-    const rider = await Rider.findById(riderMongoId);
-
-    await Order.findByIdAndUpdate(orderId, {
-      riderId: rider.riderId,
-      orderStatus: "ACCEPTED"
-    });
-
-    await bot.sendMessage(rider.chatId, `🛒 Assigned Order ${orderId}`);
-    return bot.sendMessage(chatId, "✅ Assigned");
   }
 });
 
 ////////////////////////////////////////////////////
-/// ROOT
-////////////////////////////////////////////////////
 app.get('/', (_, res) => res.send("🚀 Backend LIVE"));
 
-////////////////////////////////////////////////////
-/// KEEP ALIVE
-////////////////////////////////////////////////////
 setInterval(() => {
   https.get(process.env.BASE_URL, () => {});
 }, 14 * 60 * 1000);
 
-////////////////////////////////////////////////////
-/// SERVER
-////////////////////////////////////////////////////
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Running on ${PORT}`);
-});
+app.listen(process.env.PORT || 3000, () =>
+  console.log("🚀 Server Running")
+);
